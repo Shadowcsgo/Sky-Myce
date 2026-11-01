@@ -471,6 +471,14 @@ val greenhouseCheck by tasks.registering(JavaExec::class) {
     mainClass = "me.mycellium.skymyce.features.garden.GreenhouseCheckKt"
 }
 tasks.check { dependsOn(greenhouseCheck) }
+val miningCheck by tasks.registering(JavaExec::class) {
+    group = "verification"
+    description = "Checks the Mining Spread follow-up pick and Pickobulus commission spot ranking"
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass = "me.mycellium.skymyce.features.mining.MiningCheckKt"
+}
+tasks.check { dependsOn(miningCheck) }
 for (browserCheckName in listOf("BrowserLinks", "BrowserExtension")) {
     val browserCheck = tasks.register<JavaExec>(browserCheckName.replaceFirstChar { it.lowercase() } + "Check") {
         group = "verification"

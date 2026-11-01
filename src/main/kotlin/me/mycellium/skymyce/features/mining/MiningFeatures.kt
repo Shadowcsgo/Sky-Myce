@@ -3,6 +3,7 @@ package me.mycellium.skymyce.features.mining
 import me.mycellium.skymyce.SkyMyceModule
 import me.mycellium.skymyce.api.events.ChatChannel
 import me.mycellium.skymyce.config.mining.MiningConfig
+import me.mycellium.skymyce.hud.HudTheme
 import me.mycellium.skymyce.hud.hudPanel
 import me.mycellium.skymyce.hud.updateTextLines
 import me.mycellium.skymyce.hud.widget.Anchor
@@ -10,14 +11,34 @@ import me.mycellium.skymyce.hud.widget.Widget
 import me.mycellium.skymyce.utils.MC
 import me.mycellium.skymyce.utils.PlayerUtils.sendCommand
 import me.mycellium.skymyce.utils.PlayerUtils.sendMessage
+import net.minecraft.core.BlockPos
+import net.minecraft.core.Direction
+import net.minecraft.gizmos.GizmoStyle
+import net.minecraft.gizmos.Gizmos
+import net.minecraft.gizmos.TextGizmo
+import net.minecraft.world.level.ClipContext
+import net.minecraft.world.phys.AABB
+import net.minecraft.world.phys.BlockHitResult
+import net.minecraft.world.phys.HitResult
+import net.minecraft.world.phys.Vec3
+import tech.thatgravyboat.skyblockapi.api.area.mining.CommissionArea
+import tech.thatgravyboat.skyblockapi.api.area.mining.CommissionsAPI
+import tech.thatgravyboat.skyblockapi.api.area.mining.GlaciteAPI
+import tech.thatgravyboat.skyblockapi.api.area.mining.MiningBlock
+import tech.thatgravyboat.skyblockapi.api.area.mining.MiningBlockFamily
 import tech.thatgravyboat.skyblockapi.api.events.base.Subscription
 import tech.thatgravyboat.skyblockapi.api.events.base.predicates.OnlyIn
 import tech.thatgravyboat.skyblockapi.api.events.chat.ChatReceivedEvent
+import tech.thatgravyboat.skyblockapi.api.events.info.TabWidget
+import tech.thatgravyboat.skyblockapi.api.events.info.TabWidgetChangeEvent
 import tech.thatgravyboat.skyblockapi.api.events.location.IslandChangeEvent
+import tech.thatgravyboat.skyblockapi.api.events.render.RenderWorldEvent
+import tech.thatgravyboat.skyblockapi.api.events.time.TickEvent
 import tech.thatgravyboat.skyblockapi.api.location.LocationAPI
 import tech.thatgravyboat.skyblockapi.api.location.SkyBlockIsland
 import tech.thatgravyboat.skyblockapi.api.profile.party.PartyAPI
 import tech.thatgravyboat.skyblockapi.utils.Scheduling.schedule
+import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.random.Random
 import kotlin.time.Duration.Companion.milliseconds
@@ -64,8 +85,93 @@ object MiningFeatures : SkyMyceModule() {
         crystalHollowsContent.updateTextLines(lines)
     }
 
+    private const val SPREAD_COLOR = 0x55FFFF
+    private const val BLAST_COLOR = 0xFFAA00
+    private const val BLAST_SCAN = 12
+
+    private var miningSpread: Int? = null
+    private var gemstoneSpread: Int? = null
+    private var nextBlock: Pair<BlockPos, MiningBlock>? = null
+    private var blast: Pair<BlockPos, List<BlockPos>>? = null
+    private var ticks = 0
+
+    @Subscription
+    fun onTabWidget(event: TabWidgetChangeEvent) {
+        if (event.widget != TabWidget.STATS) return
+        miningSpread = parseStat(event.new, "Mining Spread")
+        gemstoneSpread = parseStat(event.new, "Gemstone Spread")
+    }
+
+    @Subscription
+    fun onTick(event: TickEvent) {
+        if (MiningConfig.spreadPredictor) predictSpread() else nextBlock = null
+        // The blast scan covers ~15k blocks, so it refreshes once a second rather than every tick.
+        if (!MiningConfig.pickobulusHelper) blast = null else if (ticks++ % 20 == 0) blast = findBlast()
+    }
+
+    private fun predictSpread() {
+        val level = MC.instance.level ?: return
+        val player = MC.instance.player ?: return
+        nextBlock = nextBlock?.takeIf { (pos, type) -> level.getBlockState(pos).block in type.blocks }
+        if (!MC.instance.options.keyAttack.isDown) return
+        val mining = (MC.instance.hitResult as? BlockHitResult)?.takeIf { it.type == HitResult.Type.BLOCK }?.blockPos ?: return
+        val type = MiningBlock.currentlyActiveBlocks.firstOrNull { level.getBlockState(mining).block in it.blocks } ?: return
+        fun sameType(pos: BlockPos) = level.getBlockState(pos).block in type.blocks
+        val eye = player.eyePosition
+        val reach = player.blockInteractionRange()
+        val r = ceil(reach).toInt()
+        val origin = BlockPos.containing(eye)
+        // Only blocks with an open face (counting the one being broken) can be aimed at straight away.
+        val candidates = BlockPos.betweenClosed(origin.offset(-r, -r, -r), origin.offset(r, r, r)).mapNotNull { pos ->
+            pos.immutable().takeIf { it != mining && sameType(it) && Vec3.atCenterOf(it).distanceTo(eye) <= reach &&
+                Direction.entries.any { d -> it.relative(d).let { n -> n == mining || level.getBlockState(n).isAir } } }
+        }
+        val spread = (miningSpread ?: MiningConfig.spreadFallback) + if (type.family == MiningBlockFamily.GEMSTONES) gemstoneSpread ?: 0 else 0
+        val look = player.lookAngle
+        nextBlock = bestSpreadFollowUp(mining, candidates, ::sameType, spread.toDouble()) { 1 - look.dot(Vec3.atCenterOf(it).subtract(eye).normalize()) }
+            ?.let { it to type }
+    }
+
+    private fun findBlast(): Pair<BlockPos, List<BlockPos>>? {
+        if (!GlaciteAPI.inGlaciteTunnels()) return null
+        val level = MC.instance.level ?: return null
+        val player = MC.instance.player ?: return null
+        val ores = CommissionsAPI.commissions.filter { it.area == CommissionArea.GLACITE_TUNNELS && it.progress < 1f }.mapNotNull { collectorOre(it.name) }.toSet()
+        val blocks = MiningBlock.entries.filter { it.name.substringAfterLast('_') in ores }.flatMap { it.blocks }.toSet()
+        if (blocks.isEmpty()) return null
+        val eye = player.eyePosition
+        val origin = BlockPos.containing(eye)
+        val targets = BlockPos.betweenClosed(origin.offset(-BLAST_SCAN, -BLAST_SCAN, -BLAST_SCAN), origin.offset(BLAST_SCAN, BLAST_SCAN, BLAST_SCAN))
+            .mapNotNull { pos -> pos.immutable().takeIf { level.getBlockState(it).block in blocks } }
+        val radius = MiningConfig.pickobulusRadius
+        // The thrown pickaxe lands on the first block in your line of sight, so only a visible centre is reachable.
+        // shortcut: only target blocks are tried as centres; a hard stone block between two veins could score higher.
+        val centre = rankBlastCentres(targets, radius).take(64).firstOrNull { (pos, _) ->
+            level.clip(ClipContext(eye, Vec3.atCenterOf(pos), ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, player)).blockPos == pos
+        }?.first ?: return null
+        return centre to targets.filter { it.distSqr(centre) <= radius * radius }
+    }
+
+    @Subscription
+    fun render(event: RenderWorldEvent.AfterTranslucent) {
+        val next = nextBlock?.first
+        val blast = blast
+        if (next == null && blast == null) return
+        MC.instance.levelRenderer.collectPerFrameGizmos().use {
+            next?.let { Gizmos.cuboid(AABB(it).inflate(0.004), GizmoStyle.stroke(HudTheme.alpha(SPREAD_COLOR, 100), 3f)).setAlwaysOnTop() }
+            blast?.let { (centre, hits) ->
+                hits.forEach { Gizmos.cuboid(AABB(it).inflate(0.002), GizmoStyle.fill(HudTheme.alpha(BLAST_COLOR, 25))) }
+                Gizmos.cuboid(AABB(centre).inflate(0.004), GizmoStyle.stroke(HudTheme.alpha(BLAST_COLOR, 100), 3f)).setAlwaysOnTop()
+                Gizmos.billboardText("Pickobulus · ~${hits.size} blocks", Vec3.atCenterOf(centre).add(0.0, 0.9, 0.0),
+                    TextGizmo.Style.forColorAndCentered(HudTheme.alpha(BLAST_COLOR, 100)).withScale(0.4f)).setAlwaysOnTop()
+            }
+        }
+    }
+
     @Subscription
     fun onIslandChange(event: IslandChangeEvent) {
+        nextBlock = null
+        blast = null
         if (event.old == SkyBlockIsland.CRYSTAL_HOLLOWS) {
             totalTime += System.currentTimeMillis() - timeSince
         }
@@ -98,3 +204,27 @@ object MiningFeatures : SkyMyceModule() {
         }
     }
 }
+
+internal fun parseStat(lines: List<String>, stat: String) =
+    lines.firstNotNullOfOrNull { Regex("$stat: \\D*([\\d,]+)").find(it)?.groupValues?.get(1)?.replace(",", "")?.toIntOrNull() }
+
+/** The ore of a collector commission, e.g. "Umber Collector" -> UMBER and "Onyx Gemstone Collector" -> ONYX, matching [MiningBlock] name suffixes. */
+internal fun collectorOre(name: String) = name.takeIf { it.endsWith("Collector") }?.substringBefore(' ')?.uppercase()
+
+/** Mining Spread breaks [spread]/100 extra blocks on average, shared among the broken block's same-type face neighbours. */
+// shortcut: assumes spread takes same-type face neighbours evenly; revisit if Hypixel's pick rule turns out different.
+internal fun spreadTakeChance(spread: Double, sameTypeNeighbours: Int) =
+    if (sameTypeNeighbours <= 0) 0.0 else (spread / 100.0 / sameTypeNeighbours).coerceIn(0.0, 1.0)
+
+/** The candidate worth mining once [mining] breaks: likely to survive its spread, then the most expected spread of its own, then cheapest to aim at. */
+internal fun bestSpreadFollowUp(mining: BlockPos, candidates: Collection<BlockPos>, sameType: (BlockPos) -> Boolean, spread: Double, aimCost: (BlockPos) -> Double): BlockPos? {
+    fun neighbours(pos: BlockPos) = Direction.entries.map(pos::relative).filter { it != mining && sameType(it) }
+    val take = spreadTakeChance(spread, neighbours(mining).size)
+    fun survives(pos: BlockPos) = if (pos.distManhattan(mining) == 1) 1 - take else 1.0
+    fun score(pos: BlockPos) = survives(pos) * (1 + minOf(spread / 100.0, neighbours(pos).sumOf(::survives)))
+    return candidates.filter { it != mining }.maxWithOrNull(compareBy<BlockPos>(::score).thenByDescending(aimCost))
+}
+
+/** Blast centres ranked by how many [targets] lie within [radius] blocks of them. */
+internal fun rankBlastCentres(targets: List<BlockPos>, radius: Int) =
+    targets.map { c -> c to targets.count { it.distSqr(c) <= radius * radius } }.sortedByDescending { it.second }
