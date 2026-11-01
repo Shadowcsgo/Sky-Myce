@@ -947,6 +947,9 @@ object GreenhousePlanner : SkyMyceModule() {
         return plot to placement
     }
 
+    /** What right-clicking a mutation stopped at a pause does: a Thunderling past 16,000 charge (2,000 a stage) is discharged, others woken. */
+    internal fun pauseAction(plantId: String) = if (plantId == "THUNDERLING") "discharge it" else "wake it"
+
     /** Right-clicking a mutation stopped at a pause (an asleep Snoozling) wakes it, so its growth is timed on from the click. */
     private fun noteWake(stack: ItemStack, entity: Entity?) {
         if (!active() || LocationAPI.island != SkyBlockIsland.GARDEN) return
@@ -960,7 +963,7 @@ object GreenhousePlanner : SkyMyceModule() {
         val water = reading.water?.let { waterAt(it, reading.at, now, growthCycle(), drainFor(plot, key, placement.plantId), smooth = false) }
         plot.growth[key] = reading.copy(stage = estimate.stage.toInt(), at = now, awake = true, water = water)
         revision++; dirty = true; save()
-        displayModMessage("§7${catalog?.get(placement.plantId)?.name ?: placement.plantId} woken at stage ${estimate.stage.toInt()}/${reading.stages}; its growth is timed from now")
+        displayModMessage("§7${catalog?.get(placement.plantId)?.name ?: placement.plantId} ${if (placement.plantId == "THUNDERLING") "discharged" else "woken"} at stage ${estimate.stage.toInt()}/${reading.stages}; its growth is timed from now")
     }
 
     @Subscription
@@ -991,6 +994,8 @@ object GreenhousePlanner : SkyMyceModule() {
         // One line per reading, so water and cycle timing can be checked against the game later.
         SkyMyce.logger.info("Greenhouse diagnostics: {} {}/{} water={} lastsForMs={} enough={} nextStageMs={}", pending.plantId, stage, stages,
             diagnostics.water, diagnostics.lastsMs, diagnostics.enoughWater, diagnostics.nextStageMs)
+        // Thunderling's charge is timed from its stage (2,000 each); logged so the tool's own figure can be checked.
+        lines.filter { it.contains("charge", ignoreCase = true) }.takeIf { it.isNotEmpty() }?.let { SkyMyce.logger.info("Greenhouse charge: {} {}", pending.plantId, it.take(4)) }
         // What the crop looks like at this stage, so its stage can later be told by sight.
         pending.plot.anchor?.let { origin -> MC.instance.level?.let { level ->
             val pos = cellPos(origin, pending.key / GREENHOUSE_SIZE, pending.key % GREENHOUSE_SIZE).above()
@@ -1011,10 +1016,10 @@ object GreenhousePlanner : SkyMyceModule() {
         analysisMessage("§a$name: growth stage $stage/$stages" + when {
             estimate == null -> ""
             estimate.ready -> if (stage >= stages) " §7· fully grown" else " §7· ready to harvest"
-            estimate.paused -> " §7· stopped until you act on it (wake it up)"
+            estimate.paused -> " §7· stopped until you act on it (${pauseAction(pending.plantId)}: right-click)"
             estimate.dryInMs == 0L -> " §c· out of water; water it and analyze it again"
             estimate.readyInMs == null && estimate.dryInMs != null -> " §e· runs out of water in about ${age(estimate.dryInMs)}, before it is ready"
-            estimate.readyInMs == null && estimate.waitInMs != null -> " §e· stops in about ${age(estimate.waitInMs)} until you act on it (wake it up)"
+            estimate.readyInMs == null && estimate.waitInMs != null -> " §e· stops in about ${age(estimate.waitInMs)} until you act on it (${pauseAction(pending.plantId)}: right-click)"
             estimate.readyInMs == null -> " §7· its growth cannot be timed; analyze it again later"
             else -> " §7· ready in about ${age(estimate.readyInMs)}"
         })

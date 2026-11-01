@@ -247,6 +247,10 @@ fun main() {
     check(estimateGrowth(snoozling, GrowthReading(5, 20, readAt - 6 * 3_600_000L, awake = true), 3.0, readAt).waitInMs == 9 * 3_600_000L) { "Next sleep" }
     check(estimateGrowth(catalog["CHEESEBITE"], GrowthReading(2, 10, readAt), 3.0, readAt).waitInMs == 6 * 3_600_000L) { "Cheesebite rat" }
     check(estimateGrowth(coalroot, GrowthReading(5, 8, readAt), 3.0, readAt).waitInMs == null) { "No pause, no wake" }
+    // Thunderling stops at 16,000 charge (stage 8) until discharged, then grows to 16 without stopping again.
+    val thunderling = catalog["THUNDERLING"]
+    check(estimateGrowth(thunderling, GrowthReading(3, 16, readAt), 3.0, readAt).let { it.waitInMs == 5 * 3 * 3_600_000L && it.readyInMs == null }) { "Thunderling charge stop" }
+    check(estimateGrowth(thunderling, GrowthReading(8, 16, readAt, awake = true), 3.0, readAt).readyInMs == 8 * 3 * 3_600_000L) { "Thunderling discharged" }
     // Glasscorn is ready at 7 and 8, then another stage starts it again from 1.
     val glasscornPlant = catalog["GLASSCORN"]
     check(estimateGrowth(glasscornPlant, GrowthReading(6, 8, readAt - 3 * 3_600_000L), 3.0, readAt).ready) { "Glasscorn ready at 7" }

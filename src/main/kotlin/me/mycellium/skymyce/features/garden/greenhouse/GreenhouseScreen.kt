@@ -184,7 +184,7 @@ class GreenhouseScreen : MenuScreen(Component.literal("Greenhouses"), MenuPage.G
                 estimate.paused -> GrowthState.PAUSED
                 else -> GrowthState.GROWING
             }
-            GrowthRow(where, placement.plantId, state, estimate.stage, estimate.stages, estimate.readyInMs)
+            GrowthRow(where, placement.plantId, state, estimate.stage, estimate.stages, estimate.readyInMs, estimate.waitInMs)
         }.sortedWith(compareBy({ it.state.ordinal }, { it.readyInMs ?: Long.MAX_VALUE }))
     }
 
@@ -327,7 +327,7 @@ internal class GreenhouseGrid(
         val stage = placement?.let(growth)?.let { estimate -> when {
             estimate.stages == 0 -> "\nFully grown"
             else -> "\nAbout stage ${"%.1f".format(estimate.stage)} of ${estimate.stages}" +
-                if (estimate.ready) ", ready" else if (estimate.paused) ", stopped until you wake it" else ""
+                if (estimate.ready) ", ready" else if (estimate.paused) ", stopped until you ${GreenhousePlanner.pauseAction(plan.plantId)}" else ""
         } }.orEmpty()
         return "$where\n$name (${if (plan.role == Role.TARGET) "target" else "ingredient"}) on ${GreenhousePlanner.soilName(plan.soil)}\n$state$stage"
     }
@@ -336,7 +336,8 @@ internal class GreenhouseGrid(
 internal enum class GrowthState { READY, PAUSED, GROWING, UNANALYSED, WAITING }
 
 /** One target slot's growth; [readyInMs] comes from a reading, or is an estimate from the spawn time when not analysed. */
-internal data class GrowthRow(val where: String, val plantId: String, val state: GrowthState, val stage: Double, val stages: Int, val readyInMs: Long?)
+internal data class GrowthRow(val where: String, val plantId: String, val state: GrowthState, val stage: Double, val stages: Int, val readyInMs: Long?,
+                            val waitInMs: Long? = null)
 
 /** Target slots as aligned rows: slot, stage, a progress bar and the time until fully grown. */
 internal class GrowthRows(private val rows: List<GrowthRow>) : BaseUIComponent() {
@@ -355,8 +356,9 @@ internal class GrowthRows(private val rows: List<GrowthRow>) : BaseUIComponent()
             val top = y() + i * line
             val (color, note) = when (row.state) {
                 GrowthState.READY -> MenuTheme.YELLOW to "ready now"
-                GrowthState.PAUSED -> MenuTheme.RED to "stopped, wake it"
-                GrowthState.GROWING -> MenuTheme.GREEN to (row.readyInMs?.let { "ready in ${GreenhousePlanner.age(it)}" } ?: "analyze again")
+                GrowthState.PAUSED -> MenuTheme.RED to "stopped, ${GreenhousePlanner.pauseAction(row.plantId)}"
+                GrowthState.GROWING -> MenuTheme.GREEN to (row.readyInMs?.let { "ready in ${GreenhousePlanner.age(it)}" }
+                    ?: row.waitInMs?.let { "${GreenhousePlanner.pauseAction(row.plantId).removeSuffix(" it")} in ${GreenhousePlanner.age(it)}" } ?: "analyze again")
                 GrowthState.UNANALYSED -> MenuTheme.MUTED to "not analysed" + (row.readyInMs?.let { if (it < 60_000) ", may be ready" else ", ~${GreenhousePlanner.age(it)}" } ?: "")
                 GrowthState.WAITING -> MenuTheme.MUTED to "not spawned"
             }
