@@ -1,8 +1,21 @@
 package me.mycellium.skymyce.features.mining
 
+import com.google.gson.JsonArray
+import com.google.gson.JsonObject
+import me.mycellium.skymyce.SkyMyce
 import me.mycellium.skymyce.SkyMyceModule
 import me.mycellium.skymyce.api.events.ChatChannel
+import me.mycellium.skymyce.config.Config
 import me.mycellium.skymyce.config.mining.MiningConfig
+import me.mycellium.skymyce.utils.AtomicJsonFile
+import me.mycellium.skymyce.utils.StateWriter
+import me.mycellium.skymyce.utils.Utils
+import net.minecraft.core.registries.BuiltInRegistries
+import net.minecraft.world.level.block.Blocks
+import tech.thatgravyboat.skyblockapi.api.events.level.BlockChangeEvent
+import tech.thatgravyboat.skyblockapi.api.events.level.MiningBlockMinedEvent
+import tech.thatgravyboat.skyblockapi.utils.Scheduling
+import kotlin.math.abs
 import me.mycellium.skymyce.hud.HudTheme
 import me.mycellium.skymyce.hud.hudPanel
 import me.mycellium.skymyce.hud.updateTextLines
@@ -104,9 +117,87 @@ object MiningFeatures : SkyMyceModule() {
 
     @Subscription
     fun onTick(event: TickEvent) {
+        ticks++
         if (MiningConfig.spreadPredictor) predictSpread() else nextBlock = null
         // The blast scan covers ~15k blocks, so it refreshes once a second rather than every tick.
-        if (!MiningConfig.pickobulusHelper) blast = null else if (ticks++ % 20 == 0) blast = findBlast()
+        if (!MiningConfig.pickobulusHelper) blast = null else if (ticks % 20 == 0) blast = findBlast()
+        if (Config.devMode && MiningConfig.recordSpread) recordSpread() else { snapshot = null; pending = null; recentBreaks.clear() }
+    }
+
+    // ---- Developer spread recorder: raw samples for working out how Hypixel picks spread blocks ----
+
+    private const val SAMPLE_RADIUS = 3
+    private const val SAMPLE_WINDOW = 10
+    private const val MAX_SAMPLES = 1500
+
+    private class Snapshot(val centre: BlockPos, val type: MiningBlock, val blocks: List<String>, val sample: JsonObject) { var tick = 0 }
+    private var snapshot: Snapshot? = null
+    private var pending: Snapshot? = null
+    private val recentBreaks = ArrayDeque<Pair<BlockPos, Int>>()
+    private val sampleFile = AtomicJsonFile(SkyMyce.configPath.resolve("mining_spread_samples.json"), 4 * 1024 * 1024)
+    private val sampleWriter = StateWriter<JsonArray>({ sampleFile.write(it) }, { action -> Scheduling.schedule(500.milliseconds) { action() } },
+        { SkyMyce.logger.warn("Could not save Mining Spread samples; previous file retained") })
+    private val samples by lazy { runCatching { sampleFile.read()?.asJsonArray }.getOrNull() ?: JsonArray() }
+
+    /** Snapshots the ore under the crosshair every tick, so the surroundings are known from just before it breaks. */
+    private fun recordSpread() {
+        pending?.takeIf { ticks >= it.tick + SAMPLE_WINDOW }?.let { finishSample(it); pending = null }
+        val level = MC.instance.level ?: return
+        val player = MC.instance.player ?: return
+        val hit = (MC.instance.hitResult as? BlockHitResult)?.takeIf { it.type == HitResult.Type.BLOCK && MC.instance.options.keyAttack.isDown }
+        val type = hit?.let { h -> MiningBlock.currentlyActiveBlocks.firstOrNull { level.getBlockState(h.blockPos).block in it.blocks } }
+        if (hit == null || type == null) { snapshot = null; return }
+        val centre = hit.blockPos
+        val r = SAMPLE_RADIUS
+        val blocks = BlockPos.betweenClosed(centre.offset(-r, -r, -r), centre.offset(r, r, r))
+            .map { BuiltInRegistries.BLOCK.getKey(level.getBlockState(it).block).toString() }
+        val eye = player.eyePosition.subtract(Vec3.atCenterOf(centre))
+        val look = player.lookAngle
+        snapshot = Snapshot(centre, type, blocks, JsonObject().apply {
+            addProperty("island", LocationAPI.island?.name)
+            addProperty("block", type.name)
+            addProperty("family", type.family.name)
+            miningSpread?.let { addProperty("miningSpread", it) }
+            gemstoneSpread?.let { addProperty("gemstoneSpread", it) }
+            addProperty("face", hit.direction.name)
+            add("eye", JsonArray().apply { add(eye.x); add(eye.y); add(eye.z) })
+            add("look", JsonArray().apply { add(look.x); add(look.y); add(look.z) })
+        })
+    }
+
+    @Subscription
+    fun onOreMined(event: MiningBlockMinedEvent) {
+        val shot = snapshot ?: return
+        if (event.byMiningSpread || event.pos != shot.centre || pending != null) return
+        pending = shot.also { it.tick = ticks }
+        snapshot = null
+    }
+
+    @Subscription
+    fun onBlockChange(event: BlockChangeEvent) {
+        if (!Config.devMode || !MiningConfig.recordSpread) return
+        if (!event.state.isAir && !event.state.`is`(Blocks.BEDROCK)) return
+        recentBreaks.addLast(event.pos.immutable() to ticks)
+        while (recentBreaks.isNotEmpty() && recentBreaks.first().second < ticks - 40) recentBreaks.removeFirst()
+    }
+
+    private fun finishSample(shot: Snapshot) {
+        val breaks = recentBreaks.filter { (pos, tick) -> tick in shot.tick - 1..shot.tick + SAMPLE_WINDOW && pos != shot.centre &&
+            maxOf(abs(pos.x - shot.centre.x), abs(pos.y - shot.centre.y), abs(pos.z - shot.centre.z)) <= SAMPLE_RADIUS }
+            .distinctBy { it.first }
+        val (palette, grid) = encodeGrid(shot.blocks) ?: return
+        shot.sample.apply {
+            addProperty("t", System.currentTimeMillis())
+            add("palette", JsonArray().apply { palette.forEach(::add) })
+            addProperty("grid", grid)
+            add("broken", JsonArray().apply { breaks.forEach { (pos, tick) -> add(JsonArray().apply {
+                add(pos.x - shot.centre.x); add(pos.y - shot.centre.y); add(pos.z - shot.centre.z); add(tick - shot.tick)
+            }) } })
+        }
+        samples.add(shot.sample)
+        while (samples.size() > MAX_SAMPLES) samples.remove(0)
+        sampleWriter.submit(samples.deepCopy())
+        Utils.displayDevMessage("Spread sample ${samples.size()}: ${shot.type.name} took ${breaks.size} more")
     }
 
     private fun predictSpread() {
@@ -126,7 +217,7 @@ object MiningFeatures : SkyMyceModule() {
             pos.immutable().takeIf { it != mining && sameType(it) && Vec3.atCenterOf(it).distanceTo(eye) <= reach &&
                 Direction.entries.any { d -> it.relative(d).let { n -> n == mining || level.getBlockState(n).isAir } } }
         }
-        val spread = (miningSpread ?: MiningConfig.spreadFallback) + if (type.family == MiningBlockFamily.GEMSTONES) gemstoneSpread ?: 0 else 0
+        val spread = spreadFor(type.family == MiningBlockFamily.GEMSTONES, miningSpread, gemstoneSpread, MiningConfig.spreadFallback, MiningConfig.gemstoneSpreadFallback)
         val look = player.lookAngle
         nextBlock = bestSpreadFollowUp(mining, candidates, ::sameType, spread.toDouble()) { 1 - look.dot(Vec3.atCenterOf(it).subtract(eye).normalize()) }
             ?.let { it to type }
@@ -228,3 +319,14 @@ internal fun bestSpreadFollowUp(mining: BlockPos, candidates: Collection<BlockPo
 /** Blast centres ranked by how many [targets] lie within [radius] blocks of them. */
 internal fun rankBlastCentres(targets: List<BlockPos>, radius: Int) =
     targets.map { c -> c to targets.count { it.distSqr(c) <= radius * radius } }.sortedByDescending { it.second }
+
+/** Gemstone Spread drives gemstones and Mining Spread every other block; a stat missing from the tab list uses its fallback. */
+internal fun spreadFor(gemstone: Boolean, miningSpread: Int?, gemstoneSpread: Int?, miningFallback: Int, gemstoneFallback: Int) =
+    if (gemstone) gemstoneSpread ?: gemstoneFallback else miningSpread ?: miningFallback
+
+/** Block ids as a palette plus one character per block (x, then y, then z), or null if there are too many kinds to encode. */
+internal fun encodeGrid(blocks: List<String>): Pair<List<String>, String>? {
+    val palette = blocks.distinct()
+    if (palette.size > 75) return null
+    return palette to blocks.joinToString("") { ('0' + palette.indexOf(it)).toString() }
+}

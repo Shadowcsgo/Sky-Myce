@@ -2,6 +2,7 @@ package me.mycellium.skymyce.config.mining
 
 import com.teamresourceful.resourcefulconfig.api.types.options.TranslatableValue
 import com.teamresourceful.resourcefulconfigkt.api.CategoryKt
+import me.mycellium.skymyce.config.Config
 
 object MiningConfig : CategoryKt("Mining") {
     val crystalHollowsInfo by boolean(true) {
@@ -40,10 +41,24 @@ object MiningConfig : CategoryKt("Mining") {
 
     val spreadFallback by int(100) {
         name = TranslatableValue.literal("Mining Spread (if hidden)")
-        description = TranslatableValue.literal("Used when your tab list Stats widget does not show Mining Spread")
+        description = TranslatableValue.literal("Used for non-gemstone blocks when your tab list Stats widget does not show Mining Spread")
 
         slider = true
         range = 0..1000
+    }
+
+    val gemstoneSpreadFallback by int(100) {
+        name = TranslatableValue.literal("Gemstone Spread (if hidden)")
+        description = TranslatableValue.literal("Used for gemstones when your tab list Stats widget does not show Gemstone Spread")
+
+        slider = true
+        range = 0..1000
+    }
+
+    val recordSpread by boolean(false) {
+        name = TranslatableValue.literal("Record Spread Samples")
+        description = TranslatableValue.literal("Developer: saves each ore you break, its 7x7x7 surroundings and which blocks the spread took to config/skymyce/mining_spread_samples.json")
+        condition = { Config.devMode }
     }
 
     val pickobulusHelper by boolean(false) {

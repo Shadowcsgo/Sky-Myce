@@ -22,5 +22,11 @@ fun main() {
     check(collectorOre("Glacite Walker Slayer") == null)
     check(parseStat(listOf("Stats:", " Mining Speed: ⸕1,234", " Mining Spread: ▚1,050"), "Mining Spread") == 1050)
     check(parseStat(listOf(" Mining Speed: ⸕1,234"), "Mining Spread") == null)
-    println("Mining checks passed: spread follow-up, Pickobulus centres, collector commissions and tab stats")
+    check(spreadFor(true, 300, 50, 100, 100) == 50 && spreadFor(false, 300, 50, 100, 100) == 300)
+    check(spreadFor(true, 300, null, 100, 70) == 70 && spreadFor(false, null, 50, 120, 70) == 120)
+
+    val (palette, grid) = encodeGrid(listOf("minecraft:stone", "minecraft:packed_ice", "minecraft:stone"))!!
+    check(palette == listOf("minecraft:stone", "minecraft:packed_ice") && grid == "010")
+    check(encodeGrid(List(76) { "b$it" }) == null)
+    println("Mining checks passed: spread follow-up, Pickobulus centres, collector commissions, tab stats, gemstone spread and sample encoding")
 }
