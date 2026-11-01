@@ -997,6 +997,14 @@ object GreenhousePlanner : SkyMyceModule() {
             SkyMyce.logger.info("Greenhouse look: {} {}/{} block={} {}", pending.plantId, stage, stages, level.getBlockState(pos), GreenhouseWorld.describe(level, pos))
         } }
         pending.plot.growth[pending.key] = reading
+        // A mutation that needs no water still shows a water bar; its level is dropped everywhere and never read again.
+        if (diagnostics.needsWater == false && noWater.add(pending.plantId)) plots.forEach { plot ->
+            plot.layout?.targets.orEmpty().filter { it.plantId == pending.plantId }.forEach { t ->
+                val key = t.row * GREENHOUSE_SIZE + t.col
+                plot.growth[key]?.let { plot.growth[key] = it.copy(water = null, enough = false) }
+            }
+        }
+        if (diagnostics.needsWater == true) noWater.remove(pending.plantId)
         revision++; dirty = true; save()
         val name = catalog?.get(pending.plantId)?.name ?: pending.plantId
         val estimate = targetEstimate(pending.plot, layout?.targets?.firstOrNull { it.row * GREENHOUSE_SIZE + it.col == pending.key } ?: return, now)
@@ -1090,6 +1098,8 @@ object GreenhousePlanner : SkyMyceModule() {
         }
     }
 
+    /** Mutations the Plant Diagnostics Tool said need no water (Thunderling). */
+    private val noWater = HashSet<String>()
     private var waterBarSeen = false
     private var waterBarLogged = false
     private var waterBarCheckAt = 0L
@@ -1130,6 +1140,7 @@ object GreenhousePlanner : SkyMyceModule() {
         val step = 100.0 / 16
         var changed = false
         for ((placement, water) in bars) {
+            if (placement.plantId in noWater) continue
             val key = placement.row * GREENHOUSE_SIZE + placement.col
             val reading = plot.growth[key]?.takeIf { it.at >= (plot.spawned[key] ?: 0L) } ?: continue
             // Compared as the game shows it, stepping at each tick.
@@ -1560,7 +1571,8 @@ object GreenhousePlanner : SkyMyceModule() {
             val layout = plot.layout!!
             val targets = layout.targets.filter { hasMutation(plot, it) }.take(40)
             // Every time below changes only with a new reading, so an unchanged plot uploads (and writes) nothing.
-            val latest = targets.mapNotNull { plot.growth[it.row * GREENHOUSE_SIZE + it.col]?.at }.maxOrNull()
+            // A planted plot with nothing analysed yet is shared too, from when it was planted, so it shows before its first reading.
+            val latest = targets.mapNotNull { plot.growth[it.row * GREENHOUSE_SIZE + it.col]?.at }.maxOrNull() ?: plot.plantedAt.takeIf { it > 0 }
             if (latest == null || latest < now - 29 * 86_400_000L) continue
             val estimates = targets.map { targetEstimate(plot, it, now) }
             fun minute(at: Long) = Math.floorDiv(at, 60_000L) * 60_000L
@@ -1573,7 +1585,7 @@ object GreenhousePlanner : SkyMyceModule() {
                 reminder.dryAt?.takeIf { it <= horizon }?.let { events.add(event("water", minute(it), reminder.dryCount)) }
                 reminder.waitAt?.takeIf { it <= horizon }?.let { events.add(event("wake", minute(it), reminder.waitCount)) }
             }
-            val plants = targets.map { it.plantId }.distinct().take(8)
+            val plants = (targets + layout.targets).map { it.plantId }.distinct().take(8)
             views.add(JsonObject().apply {
                 addProperty("name", plot.name)
                 addProperty("tickAt", tick?.tickAfter(latest, 0) ?: latest)
@@ -1905,6 +1917,7 @@ object GreenhousePlanner : SkyMyceModule() {
             cycle?.let { c -> add("cycle", JsonArray().apply { add(c.tickAt); add(c.cycleMs); add(c.measured) }) }
             if (deskReadAt > 0) addProperty("deskReadAt", deskReadAt)
             if (remindersShared) addProperty("remindersShared", true)
+            if (noWater.isNotEmpty()) add("noWater", JsonArray().apply { noWater.sorted().forEach(::add) })
             add("unlock", JsonObject().apply {
                 add("analyzed", JsonArray().apply { analyzed.sorted().forEach(::add) })
                 if (statusReadAt > 0) addProperty("readAt", statusReadAt)
@@ -1930,6 +1943,7 @@ object GreenhousePlanner : SkyMyceModule() {
         cycle = runCatching { json.getAsJsonArray("cycle").let { GrowthCycle(it[0].asLong, it[1].asLong.also { ms -> require(ms in 60_000L..86_400_000L) }, it[2].asBoolean) } }.getOrNull()
         deskReadAt = runCatching { json["deskReadAt"]?.asLong }.getOrNull() ?: 0L
         remindersShared = runCatching { json["remindersShared"]?.asBoolean }.getOrNull() == true
+        runCatching { json.getAsJsonArray("noWater")?.forEach { e -> runCatching { e.asString }.getOrNull()?.takeIf { catalog[it] != null }?.let(noWater::add) } }
         runCatching { json.getAsJsonObject("unlock")?.let { section ->
             section.getAsJsonArray("analyzed")?.forEach { e -> runCatching { e.asString }.getOrNull()?.takeIf { catalog[it]?.mutation == true }?.let(analyzed::add) }
             statusReadAt = section["readAt"]?.asLong ?: 0L
