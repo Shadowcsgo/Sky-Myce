@@ -50,6 +50,9 @@ import tech.thatgravyboat.skyblockapi.api.location.SkyBlockIsland
 import tech.thatgravyboat.skyblockapi.api.profile.party.PartyAPI
 import tech.thatgravyboat.skyblockapi.utils.Scheduling.schedule
 import kotlin.math.ceil
+import kotlin.math.atan
+import kotlin.math.cos
+import kotlin.math.tan
 import kotlin.math.floor
 import kotlin.random.Random
 import kotlin.time.Duration.Companion.milliseconds
@@ -191,30 +194,49 @@ object MiningFeatures : SkyMyceModule() {
         Utils.displayDevMessage("Spread sample ${samples.size()}: ${shot.name} took ${broken.size} more")
     }
 
+    private var lastMined: Pair<BlockPos, MiningBlock>? = null
+
     private fun predictSpread() {
         val level = MC.instance.level ?: return
-        val player = MC.instance.player ?: return
         nextBlock = nextBlock?.takeIf { (pos, type) -> level.getBlockState(pos).block in type.blocks }
-        if (!MC.instance.options.keyAttack.isDown) return
-        val mining = (MC.instance.hitResult as? BlockHitResult)?.takeIf { it.type == HitResult.Type.BLOCK }?.blockPos ?: return
-        val type = MiningBlock.currentlyActiveBlocks.firstOrNull { level.getBlockState(mining).block in it.blocks } ?: return
+        val hit = (MC.instance.hitResult as? BlockHitResult)?.takeIf { it.type == HitResult.Type.BLOCK && MC.instance.options.keyAttack.isDown }?.blockPos
+        val type = hit?.let { pos -> MiningBlock.currentlyActiveBlocks.firstOrNull { level.getBlockState(pos).block in it.blocks } }
+        if (hit != null && type != null) {
+            lastMined = hit to type
+            nextBlock = pickFollowUp(hit, type, spreadDone = false)?.let { it to type }
+            return
+        }
+        // Spread lands in the same tick as the break (every recorded sample), so re-pick from what really survived.
+        lastMined?.takeIf { (pos, _) -> gone(level.getBlockState(pos).block) }?.let { (pos, mined) ->
+            lastMined = null
+            nextBlock = pickFollowUp(pos, mined, spreadDone = true)?.let { it to mined }
+        }
+    }
+
+    private fun pickFollowUp(mining: BlockPos, type: MiningBlock, spreadDone: Boolean): BlockPos? {
+        val level = MC.instance.level ?: return null
+        val player = MC.instance.player ?: return null
         fun sameType(pos: BlockPos) = level.getBlockState(pos).block in type.blocks
         fun open(pos: BlockPos) = gone(level.getBlockState(pos).block)
         val eye = player.eyePosition
         val reach = player.blockInteractionRange()
         val r = ceil(reach).toInt()
         val origin = BlockPos.containing(eye)
-        // Only blocks with an open face (counting the one being broken) can be aimed at straight away.
+        val look = player.lookAngle
+        // The FOV setting is vertical; widen it to the screen's horizontal half-angle so "on screen" covers the sides too.
+        val window = MC.instance.window
+        val viewCone = cos(atan(tan(Math.toRadians(MC.instance.options.fov().get() / 2.0)) * window.width / window.height.coerceAtLeast(1)))
+        // Only blocks on screen with a clear line through air: a mined block turns to bedrock in the Dwarven Mines, so nothing is seen through it.
         val candidates = BlockPos.betweenClosed(origin.offset(-r, -r, -r), origin.offset(r, r, r)).mapNotNull { pos ->
             pos.immutable().takeIf { it != mining && sameType(it) && Vec3.atCenterOf(it).distanceTo(eye) <= reach &&
-                Direction.entries.any { d -> it.relative(d).let { n -> n == mining || open(n) } } }
+                look.dot(Vec3.atCenterOf(it).subtract(eye).normalize()) >= viewCone &&
+                canSee(eye, it) { p -> level.getBlockState(p).isAir } }
         }
         val spread = spreadFor(type.family == MiningBlockFamily.GEMSTONES, miningSpread, gemstoneSpread, MiningConfig.spreadFallback, MiningConfig.gemstoneSpreadFallback)
-        val look = player.lookAngle
         // Spread takes any block of the mined block's family (Titanium took Mithril and back), never stone.
-        nextBlock = bestSpreadFollowUp(mining, candidates, { level.getBlockState(it).block in type.family.blocks }, ::open, spread.toDouble()) {
+        return bestSpreadFollowUp(mining, candidates, { level.getBlockState(it).block in type.family.blocks }, ::open, spread.toDouble(), spreadDone) {
             1 - look.dot(Vec3.atCenterOf(it).subtract(eye).normalize())
-        }?.let { it to type }
+        }
     }
 
     private fun findBlast(): Pair<BlockPos, List<BlockPos>>? {
@@ -256,6 +278,7 @@ object MiningFeatures : SkyMyceModule() {
     @Subscription
     fun onIslandChange(event: IslandChangeEvent) {
         nextBlock = null
+        lastMined = null
         blast = null
         if (event.old == SkyBlockIsland.CRYSTAL_HOLLOWS) {
             totalTime += System.currentTimeMillis() - timeSince
@@ -311,11 +334,12 @@ internal fun spreadPool(centre: BlockPos, gone: Set<BlockPos>, spreadKind: (Bloc
     NEIGHBOURS_26.map { (x, y, z) -> centre.offset(x, y, z) }
         .filter { it !in gone && spreadKind(it) && Direction.entries.any { d -> it.relative(d).let { n -> n in gone || open(n) } } }
 
-/** The candidate worth mining once [mining] breaks: likely to survive its spread, with the most spread of its own; near-ties go to the easiest aim. */
+/** The candidate worth mining once [mining] breaks: likely to survive its spread (unless [spreadDone]), with the most spread of its own; near-ties go to the easiest aim. */
 internal fun bestSpreadFollowUp(mining: BlockPos, candidates: Collection<BlockPos>, spreadKind: (BlockPos) -> Boolean, open: (BlockPos) -> Boolean,
-                                spread: Double, aimCost: (BlockPos) -> Double): BlockPos? {
+                                spread: Double, spreadDone: Boolean = false, aimCost: (BlockPos) -> Double): BlockPos? {
     val first = spreadPool(mining, setOf(mining), spreadKind, open).toSet()
-    val take = spreadTakeChance(spread, first.size.toDouble())
+    // Once [spreadDone], the world already shows what the spread took, so every candidate survives.
+    val take = if (spreadDone) 0.0 else spreadTakeChance(spread, first.size.toDouble())
     fun survives(pos: BlockPos) = if (pos in first) 1 - take else 1.0
     fun value(pos: BlockPos) = spreadPool(pos, setOf(mining, pos), spreadKind, open).sumOf(::survives).let { n -> minOf(spread / 100, n * spreadTakeChance(spread, n)) }
     val scored = candidates.filter { it != mining }.associateWith { survives(it) * (1 + value(it)) }
@@ -337,4 +361,17 @@ internal fun encodeGrid(blocks: List<String>): Pair<List<String>, String>? {
     val palette = blocks.distinct()
     if (palette.size > 75) return null
     return palette to blocks.joinToString("") { ('0' + palette.indexOf(it)).toString() }
+}
+
+/**
+ * Whether [eye] can see an open face of [target]: the straight line to that face's centre crosses only [passable] blocks.
+ * shortcut: checks face centres only, so a face hidden at its centre but visible at an edge is skipped; sample more points if that misses good blocks.
+ */
+internal fun canSee(eye: Vec3, target: BlockPos, passable: (BlockPos) -> Boolean) = Direction.entries.any { d ->
+    val normal = Vec3(d.stepX.toDouble(), d.stepY.toDouble(), d.stepZ.toDouble())
+    val face = Vec3.atCenterOf(target).add(normal.scale(0.49))
+    val toFace = face.subtract(eye)
+    if (!passable(target.relative(d)) || normal.dot(toFace) >= 0) return@any false
+    val steps = ceil(toFace.length() / 0.05).toInt()
+    (0..steps).all { i -> BlockPos.containing(eye.add(toFace.scale(i.toDouble() / steps))).let { it == target || passable(it) } }
 }

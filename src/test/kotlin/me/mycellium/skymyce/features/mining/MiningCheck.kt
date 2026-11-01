@@ -9,10 +9,12 @@ fun main() {
     val nearest = { pos: BlockPos -> pos.distSqr(origin) }
     val air = { pos: BlockPos -> pos !in ores }
     // The two blocks around the mined one risk the spread, so the next vein block beyond them is safest and still spreads.
-    check(bestSpreadFollowUp(origin, ores, ores::contains, air, 288.0, nearest) == BlockPos(2, 0, 0))
+    check(bestSpreadFollowUp(origin, ores, ores::contains, air, 288.0, false, nearest) == BlockPos(2, 0, 0))
     // Without spread nothing is taken, so the easiest block to aim at wins.
-    check(bestSpreadFollowUp(origin, ores, ores::contains, air, 0.0, nearest) == BlockPos(1, 0, 0))
-    check(bestSpreadFollowUp(origin, emptyList(), ores::contains, air, 288.0, nearest) == null)
+    check(bestSpreadFollowUp(origin, ores, ores::contains, air, 0.0, false, nearest) == BlockPos(1, 0, 0))
+    check(bestSpreadFollowUp(origin, emptyList(), ores::contains, air, 288.0, false, nearest) == null)
+    // Once the spread has landed, what is left is safe, so the nearest neighbour with spread of its own wins.
+    check(bestSpreadFollowUp(origin, ores, ores::contains, air, 288.0, true, nearest) == BlockPos(1, 0, 0))
     // Fitted rate: ~22% each among nine candidates at 288 spread.
     check(kotlin.math.abs(spreadTakeChance(288.0, 9.0) - 0.2198) < 0.001)
     check(spreadTakeChance(1000.0, 1.0) == 1.0 && spreadTakeChance(288.0, 0.0) == 0.0 && spreadTakeChance(0.0, 5.0) == 0.0)
@@ -25,6 +27,18 @@ fun main() {
     check(spreadPool(origin, setOf(origin), vein::contains) { !solid(it) } == listOf(BlockPos(1, 0, 0)))
     val openEdge = spreadPool(origin, setOf(origin), vein::contains) { !solid(it) || it == BlockPos(0, 2, 1) }
     check(openEdge.toSet() == setOf(BlockPos(1, 0, 0), BlockPos(0, 1, 1)))
+
+    // Suggestions must be visible: a wall in the way hides a block unless it is the one about to break.
+    val eye = net.minecraft.world.phys.Vec3(0.5, 1.6, -2.5)
+    val target = BlockPos(0, 1, 0)
+    val wall = BlockPos(0, 1, -1)
+    check(canSee(eye, target) { it != target })
+    check(!canSee(eye, target) { it != target && it != wall })
+    val mining = wall
+    check(canSee(eye, target) { it == mining || (it != target && it != wall) })
+    // Only open toward +z, away from the eye (e.g. bedrock and stone on every other side).
+    val sealed = setOf(target, wall, BlockPos(1, 1, 0), BlockPos(-1, 1, 0), BlockPos(0, 2, 0), BlockPos(0, 0, 0))
+    check(!canSee(eye, target) { it !in sealed })
 
     val cluster = listOf(BlockPos(0, 0, 0), BlockPos(1, 0, 0), BlockPos(0, 1, 0), BlockPos(10, 0, 0))
     val ranked = rankBlastCentres(cluster, 2)
