@@ -475,6 +475,45 @@ fun parseDeskGrowthTier(name: String, lore: List<String>): Int? {
     return text.firstNotNullOfOrNull { DESK_TIER.find(it)?.groupValues?.get(1)?.toInt() }?.takeIf { it in 0..9 }
 }
 
+/** A mutation, as opposed to a base crop the player plants from seed. */
+val Plant.mutation get() = rarity != Rarity.RAW
+
+/** A name compared without formatting, case or punctuation: the menu's "All-in Aloe" and chat's "ALL-IN ALOE" match. */
+fun nameKey(name: String) = name.replace(FORMATTING, "").uppercase().filter { it.isLetterOrDigit() }
+
+/**
+ * Whether a mutation is analysed, from its tooltip in the Carpenter's All Mutations menu: a green ANALYZED or a red UNKNOWN
+ * line (told by the user on 2026-11-01). Null when neither is shown.
+ */
+fun parseMutationStatus(lore: List<String>): Boolean? {
+    val text = lore.map { it.replace(FORMATTING, "") }
+    return when {
+        text.any { ANALYZED.containsMatchIn(it) } -> true
+        text.any { UNKNOWN.containsMatchIn(it) } -> false
+        else -> null
+    }
+}
+
+/**
+ * The mutations still to analyse with [analyzed] done. [ready] can be laid out now (every ingredient a base crop or analysed,
+ * since only analysed mutations can be bought), slowest chain of dependents first, as that chain decides when everything
+ * is done. [waiting] need another mutation or a higher Garden level first; [manual] spawn from conditions the planner
+ * cannot lay out.
+ */
+data class UnlockOrder(val ready: List<Plant>, val waiting: List<Plant>, val manual: List<Plant>)
+
+fun unlockOrder(catalog: PlantCatalog, analyzed: Set<String>, gardenLevel: Int): UnlockOrder {
+    val locked = catalog.plants.filter { it.mutation && it.id !in analyzed }
+    val lockedIds = locked.map { it.id }.toSet()
+    // Growth stages still ahead through a mutation: its own (plus one to spawn), then its slowest locked dependent's.
+    val chains = HashMap<String, Int>()
+    fun chain(plant: Plant): Int = chains[plant.id] ?: (plant.stages + 1 + (locked.filter { plant.id in it.requires }.maxOfOrNull(::chain) ?: 0))
+        .also { chains[plant.id] = it }
+    val (growable, manual) = locked.partition { it.solvable }
+    val (ready, waiting) = growable.partition { plant -> plant.requires.keys.none { it in lockedIds } && gardenLevelFor(catalog, plant) <= gardenLevel }
+    return UnlockOrder(ready.sortedWith(compareByDescending<Plant> { chain(it) }.thenBy { it.name }), waiting, manual)
+}
+
 private val WATER = Regex("(?i)^\\s*water:\\s*(-?\\d{1,3}(?:\\.\\d+)?)\\s*/\\s*100\\b")
 private val NO_WATER = Regex("(?i)doesn't need water")
 // Wrapped over two lore lines in the menu ("This crop has enough water to" / "reach full growth!").
@@ -485,6 +524,8 @@ private val DURATION_PART = Regex("(\\d{1,4})\\s*([dhms])")
 private val DESK_TIER = Regex("Current Tier:\\s*(\\d)\\s*/\\s*9")
 private val FULLY_GROWN = Regex("(?i)\\bstage:\\s*fully grown")
 private val GROWTH_STAGES = Regex("(?i)growth stages:\\s*(\\d{1,3})")
+private val ANALYZED = Regex("\\bANALYZED\\b")
+private val UNKNOWN = Regex("\\bUNKNOWN\\b")
 
 /**
  * Why holding [held] (a crop when [crop], else a soil placing [soils]) is wrong for a slot planned as [plan], or null
@@ -1075,6 +1116,9 @@ private fun JsonObject.text(key: String, maximum: Int): String? = get(key)?.take
  * every free footprint whose ring is satisfied (exact for 1x1 targets, which cannot block each other). Nearly satisfied
  * footprints earn partial credit to guide the search. A final prune drops ingredients that do not pay for themselves.
  * Deterministic for a given seed.
+ *
+ * [unlockIds], most urgent first, are mutations to grow at least once rather than for profit: they need no price, one of
+ * each is placed before anything else, extra copies come next, and [targetIds] only fill the space left.
  */
 class GreenhouseSolver(
     private val catalog: PlantCatalog,
@@ -1083,15 +1127,20 @@ class GreenhouseSolver(
     private val unlocked: BooleanArray,
     targetIds: List<String>,
     private val iterations: Int = 120_000,
+    unlockIds: List<String> = emptyList(),
 ) {
-    private val targets = targetIds.mapNotNull { catalog[it] }.filter { plant ->
+    private val unlocking = unlockIds.mapNotNull { catalog[it] }.filter { it.solvable && gardenLevelFor(catalog, it) <= settings.gardenLevel }.distinct()
+    // Unlock targets come first, so their pool indices are 0 until unlocking.size.
+    private val targets = (unlocking + targetIds.mapNotNull { catalog[it] }.filter { plant ->
         // An ingredient without a price costs nothing here, matching the ranking; only the target must be priced.
         plant.solvable && revenuePrice(quotes[plant.bazaarId], settings.priceMode) != null && gardenLevelFor(catalog, plant) <= settings.gardenLevel
-    }.distinct()
+    }).distinct()
     private val pool = (targets + targets.flatMap { it.requires.keys }.map { catalog[it]!! } +
         catalog.plants.filter { it.unique && it.gardenLevel <= settings.gardenLevel && costPrice(it, quotes) != null }).distinct()
     private val index = pool.withIndex().associate { (i, plant) -> plant.id to i }
-    private val revenue = DoubleArray(pool.size) { revenuePrice(quotes[pool[it].bazaarId], settings.priceMode) ?: 0.0 }
+    private val revenue = DoubleArray(pool.size) {
+        if (it < unlocking.size) UNLOCK_REVENUE * (unlocking.size - it) else revenuePrice(quotes[pool[it].bazaarId], settings.priceMode) ?: 0.0
+    }
     private val cost = DoubleArray(pool.size) { costPrice(pool[it], quotes) ?: 0.0 }
     private val needs = pool.map { plant -> if (plant in targets) plant.requires.map { (id, count) -> index.getValue(id) to count } else emptyList() }
     private val targetIndices = targets.map { index.getValue(it.id) }
@@ -1121,7 +1170,9 @@ class GreenhouseSolver(
         if (final.targets.isEmpty()) return null
         val placements = ingredients.map { Placement(pool[it.plant].id, it.row, it.col, it.size, Role.INGREDIENT) } +
             final.targets.map { Placement(pool[it.plant].id, it.row, it.col, it.size, Role.TARGET) }
-        return Layout(placements, placements.associateWith { catalog[it.plantId]!!.soils.first() }, final.exact, final.unique, now, hash)
+        val layout = Layout(placements, placements.associateWith { catalog[it.plantId]!!.soils.first() }, final.exact, final.unique, now, hash)
+        // The unlock weights are not coins; the layout keeps its real estimate (0 when a target has no price).
+        return if (unlocking.isEmpty()) layout else layout.copy(totalProfitPerHour = layout.profitPerHour(catalog, quotes, settings) ?: 0.0)
     }
 
     private fun anneal(random: Random, mutate: (List<Item>, Random) -> List<Item>?, evaluate: (List<Item>) -> Evaluation): List<Item> {
@@ -1188,11 +1239,18 @@ class GreenhouseSolver(
         val placed = ArrayList<Item>()
         var income = 0.0
         var fastest = Double.MAX_VALUE
-        for ((item, value) in valid) {
-            if (!fits(cells, item.row, item.col, item.size)) continue
+        fun place(item: Item, value: Double) {
             occupy(cells, item, GREENHOUSE_CELLS)
             placed += item; income += value
             fastest = minOf(fastest, cycle(item.plant, unique))
+        }
+        // One of each mutation to unlock first, so copies of one never take the only spot another fits.
+        val first = BooleanArray(unlocking.size)
+        for ((item, value) in valid) if (item.plant < unlocking.size && !first[item.plant] && fits(cells, item.row, item.col, item.size)) {
+            first[item.plant] = true; place(item, value)
+        }
+        for ((item, value) in valid) {
+            if (fits(cells, item.row, item.col, item.size)) place(item, if (item.plant < unlocking.size) value * UNLOCK_EXTRA else value)
         }
         if (fastest == Double.MAX_VALUE) fastest = hoursPerStage(settings.upgrade, unique, settings.cropGrowth)
         val exact = income - ingredients.sumOf { cost[it.plant] } / fastest
@@ -1373,3 +1431,27 @@ class GreenhouseSolver(
 }
 
 private const val TEMPERATURE = 0.3
+/** Weight of a mutation to unlock, far above any coin value; an extra copy earns a small share, still above coin values. */
+private const val UNLOCK_REVENUE = 1e9
+private const val UNLOCK_EXTRA = 0.01
+
+/**
+ * A layout for unlocking [unlockIds] (most urgent first): as many of them as fit, then [fillerIds] solved for profit in the
+ * cells left. Two solves, as the unlock weights would drown out the filler's coin values in one. Null when nothing fits.
+ */
+fun solveUnlockLayout(catalog: PlantCatalog, quotes: Map<String, Quote>, settings: GreenhouseSettings, unlocked: BooleanArray, unlockIds: List<String>,
+                      fillerIds: List<String>, seed: Long, now: Long, hash: String, iterations: Int = 120_000): Layout? {
+    // Unique crops only for the growth bonus are the profit solve's choice; under the unlock weights they would take every free cell.
+    val noBonus = settings.copy(uniqueElsewhere = catalog.plants.filter { it.unique }.map { it.id }.toSet())
+    val first = if (unlockIds.isEmpty()) null else GreenhouseSolver(catalog, quotes, noBonus, unlocked, emptyList(), iterations, unlockIds).solve(seed, now, hash)
+    val used = first?.cells?.keys.orEmpty()
+    val uniqueHere = first?.placements.orEmpty().filter { it.role == Role.INGREDIENT && catalog[it.plantId]?.unique == true }.map { it.plantId }
+    val rest = BooleanArray(GREENHOUSE_CELLS) { unlocked[it] && it !in used }
+    val filler = if (fillerIds.isEmpty()) null
+        else GreenhouseSolver(catalog, quotes, settings.copy(uniqueElsewhere = settings.uniqueElsewhere + uniqueHere), rest, fillerIds, iterations).solve(seed + 1, now, hash)
+    if (first == null || filler == null) return first ?: filler
+    val placements = first.placements + filler.placements
+    val layout = Layout(placements, first.soils + filler.soils, 0.0,
+        settings.uniqueWith(placements.filter { it.role == Role.INGREDIENT && catalog[it.plantId]?.unique == true }.map { it.plantId }), now, hash)
+    return layout.copy(totalProfitPerHour = layout.profitPerHour(catalog, quotes, settings) ?: 0.0)
+}

@@ -405,4 +405,30 @@ private fun checkMarket() {
     check(parseBazaarRetryAt(date, now) == now + 900_000) { "Retry date" }
     for (invalid in listOf(null, "", "not a retry deadline", "-1", "1.5", "Thu, 1 Jan 1970 00:00:00 GMT")) check(parseBazaarRetryAt(invalid, now) == null) { "Retry $invalid" }
     check(parseBazaarRetryAt("999999999999999999999999999999999999", now) == Long.MAX_VALUE && parseBazaarRetryAt("2", Long.MAX_VALUE - 1000) == Long.MAX_VALUE) { "Retry saturates" }
+
+    // Unlocking: the All Mutations tooltip, names across menu and chat, the order and the two-stage layout.
+    check(parseMutationStatus(listOf("§7Rarity", "§a§lANALYZED")) == true && parseMutationStatus(listOf("§c§lUNKNOWN")) == false &&
+        parseMutationStatus(listOf("Analyzed mutations can be bought")) == null) { "Mutation status" }
+    check(nameKey("§6All-in Aloe") == nameKey("ALL-IN ALOE") && nameKey("Do-not-eat-shroom") != nameKey("Shadevine")) { "Name keys" }
+    val fresh = unlockOrder(catalog, emptySet(), 15)
+    check(fresh.ready.all { plant -> plant.requires.keys.all { catalog[it]!!.rarity == Rarity.RAW } } && "COALROOT" in fresh.waiting.map { it.id } &&
+        listOf("SHELLFRUIT", "LONELILY", "GODSEED", "FERMENTO").all { id -> fresh.manual.any { it.id == id } }) { "Fresh unlock order" }
+    // Shadevine leads to Magic Jellybean's 120 stages; Scourroot's chain is far shorter.
+    check(fresh.ready.indexOfFirst { it.id == "SHADEVINE" } < fresh.ready.indexOfFirst { it.id == "SCOURROOT" }) { "Slowest chain first" }
+    check(unlockOrder(catalog, setOf("SCOURROOT", "ASHWREATH"), 15).ready.any { it.id == "COALROOT" }) { "Analysed ingredients unlock" }
+    check(unlockOrder(catalog, catalog.plants.filter { it.mutation }.map { it.id }.toSet(), 15).let { it.ready.isEmpty() && it.waiting.isEmpty() && it.manual.isEmpty() }) { "All analysed" }
+    // Two mutations to unlock, one without a Bazaar price: both are placed, and their extra copies come before the filler.
+    val unlockQuotes = catalog.plants.associate { it.bazaarId to Quote(5.0, 5.0) } + ("COALROOT" to Quote(1e5, 1e5)) - "GLOOMGOURD"
+    val unlockSettings = GreenhouseSettings(0, 0, PriceMode.SELL_OFFER)
+    val unlockLayout = solveUnlockLayout(catalog, unlockQuotes, unlockSettings, full, listOf("GLOOMGOURD", "VEILSHROOM"), listOf("COALROOT"), 5, 0, "unlock-x", 20_000)!!
+    validate(unlockLayout, full)
+    val unlockCounts = unlockLayout.targets.groupingBy { it.plantId }.eachCount()
+    check(unlockCounts.keys.containsAll(listOf("GLOOMGOURD", "VEILSHROOM")) && unlockLayout.targets.size > 10 && unlockLayout.totalProfitPerHour < 1e6) { "Unlock layout $unlockCounts" }
+    // Room for one Snoozling with its ring (5x5) and a 4x4 corner no copy fits, which Coalroot fills.
+    val twoRegions = BooleanArray(GREENHOUSE_CELLS) { cell -> val r = cell / 10; val c = cell % 10; r <= 4 && c <= 4 || r >= 6 && c >= 6 }
+    val bigLayout = solveUnlockLayout(catalog, unlockQuotes, unlockSettings, twoRegions, listOf("SNOOZLING"), listOf("COALROOT"), 5, 0, "unlock-y", 20_000)!!
+    validate(bigLayout, twoRegions)
+    val bigCounts = bigLayout.targets.groupingBy { it.plantId }.eachCount()
+    check((bigCounts["SNOOZLING"] ?: 0) >= 1 && (bigCounts["COALROOT"] ?: 0) >= 1) { "Unlock filler $bigCounts" }
+    println("  unlock layouts: $unlockCounts; $bigCounts")
 }

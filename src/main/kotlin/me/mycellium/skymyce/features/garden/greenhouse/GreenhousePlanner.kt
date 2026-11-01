@@ -360,6 +360,7 @@ object GreenhousePlanner : SkyMyceModule() {
                         prices = quotes; pricesObservedAt = snapshot.observedAt; priceFailureLogged = false
                         dirty = true; revision++; save()
                         waitingForPrices?.let { (plot, force) -> waitingForPrices = null; plan(plot, force) }
+                        solveNextUnlock()
                     }
                 }.onFailure { error ->
                     // Keep the last good prices; log the first failure of a streak only.
@@ -400,6 +401,8 @@ object GreenhousePlanner : SkyMyceModule() {
             val result = runCatching { GreenhouseSolver(catalog, quotes, settings, unlocked, listOf(target)).solve(hash.hashCode().toLong(), System.currentTimeMillis(), hash) }
             MC.instance.execute {
                 solving = false
+                // An unlock solve that waited for this one goes next.
+                solveNextUnlock()
                 result.onFailure { SkyMyce.logger.warn("Greenhouse layout could not be solved", it) }
                 val solved = result.getOrNull() ?: return@execute displayModMessage("§cNo valid layout for $name with the unlocked cells and current prices")
                 layouts.remove(hash); layouts[hash] = solved
@@ -503,6 +506,16 @@ object GreenhousePlanner : SkyMyceModule() {
                 val row = IntegerArgumentType.getInteger(context, "row") - 1; val column = IntegerArgumentType.getInteger(context, "column") - 1
                 run { toggleLock(row, column) }
             })))
+        .then(literal("unlock").executes { run(::unlockGuide) }
+            .then(literal("stop").executes { run(::stopUnlock) })
+            .then(literal("count").then(argument("count", IntegerArgumentType.integer(1, 64)).executes { context ->
+                val count = IntegerArgumentType.getInteger(context, "count"); run { chooseUnlockCount(count) }
+            }))
+            .then(literal("pick").then(argument("plot", StringArgumentType.word()).suggests { _, builder -> SharedSuggestionProvider.suggest(plots.map { it.name }, builder) }
+                .executes { context -> val name = StringArgumentType.getString(context, "plot"); run { pickUnlockPlot(name) } }))
+            .then(literal("done").then(argument("mutation", StringArgumentType.word())
+                .suggests { _, builder -> SharedSuggestionProvider.suggest(catalog?.plants?.filter { it.mutation && it.id !in analyzed }?.map { it.id }.orEmpty(), builder) }
+                .executes { context -> val id = StringArgumentType.getString(context, "mutation").uppercase(); run { markAnalyzed(id) } })))
         .then(literal("missing").executes { run { showMissing(plotHere() ?: selected()) } })
         .then(literal("shopping").executes { run { showMissing(plotHere() ?: selected()) } })
         .then(literal("get").then(argument("plot", StringArgumentType.word()).then(argument("item", StringArgumentType.word()).executes { context ->
@@ -539,6 +552,8 @@ object GreenhousePlanner : SkyMyceModule() {
             "plan <mutation>" to "Solve a new layout for that mutation on this plot",
             "auto" to "Solve a new layout for the most profitable mutation",
             "recompute" to "Solve again, ignoring the cached layout",
+            "unlock" to "Walks you through analysing every mutation: reads the Carpenter's All Mutations, plans the greenhouses you pick and swaps their layouts as you go",
+            "unlock done <mutation>" to "Mark a mutation as analysed if the guide missed it",
             "missing" to "Everything still needed; click a crop for /bz with the amount copied, or a soil for /gfs (also: shopping)",
             "lock <row> <column>" to "Exclude or include one slot; run recompute afterwards",
             "remove <name>" to "Forget a plot",
@@ -622,6 +637,7 @@ object GreenhousePlanner : SkyMyceModule() {
     private fun removePlot(name: String) {
         val removed = plots.firstOrNull { it.name.equals(name, true) } ?: return displayModMessage("§cNo Greenhouse plot named $name")
         plots.remove(removed)
+        unlockPlots.remove(removed.name); unlockQueue.remove(removed)
         if (plot === removed) plot = null
         if (waitingForPrices?.first === removed) waitingForPrices = null
         dirty = true; revision++; save()
@@ -1188,6 +1204,268 @@ object GreenhousePlanner : SkyMyceModule() {
         return estimateGrowth(plant, reading, stageHours(), now, growthCycle(), drainFor(plot, key, placement.plantId))
     }
 
+    // ---- Unlocking every mutation -------------------------------------------------------------------------------
+
+    private enum class UnlockStep { OFF, READING, COUNT, PICK, RUNNING }
+    private const val UNLOCK = "unlock-"
+    /** Different mutations offered to one plot at once; a 10x10 plot rarely fits more rings than this. */
+    private const val MAX_UNLOCK_TARGETS = 6
+
+    /** Mutations the Carpenter's All Mutations menu showed as ANALYZED, or the game said were analysed since. */
+    private val analyzed = HashSet<String>()
+    private var statusReadAt = 0L
+    private var unlockStep = UnlockStep.OFF
+    private var unlockCount = 0
+    /** The plots the guide plans, by name; picked ones while choosing. */
+    private val unlockPlots = LinkedHashSet<String>()
+    /** Plots waiting for an unlock solve, one at a time on the solver thread. */
+    private val unlockQueue = ArrayDeque<Plot>()
+    /** Mutations seen in the menu during this reading, and each page's mutations, so both pages are known to be read. */
+    private val readStatus = HashSet<String>()
+    private val readPages = HashSet<String>()
+    private var menuLogged = false
+    private val harvestHinted = HashSet<String>()
+
+    private fun unlockPlotList() = plots.filter { it.name in unlockPlots }
+
+    /** The mutations on [plot]'s layout that are not analysed yet: what it is waiting to unlock. */
+    private fun wanted(plot: Plot): List<String> =
+        plot.layout?.targets.orEmpty().map { it.plantId }.distinct().filter { catalog?.get(it)?.mutation == true && it !in analyzed }
+
+    private fun names(ids: Collection<String>) = ids.joinToString(", ") { catalog?.get(it)?.name ?: it }
+    private fun counted(counts: Map<String, Int>) = counts.entries.joinToString(", ") { (id, n) -> "${catalog?.get(id)?.name ?: id} ×$n" }
+
+    private fun button(text: String, command: String, hover: String) = Component.literal("§b[$text] ").withStyle {
+        it.withClickEvent(ClickEvent.RunCommand(command)).withHoverEvent(HoverEvent.ShowText(Component.literal(hover)))
+    }
+
+    /** /sm greenhouse unlock: the guide's status while it runs, else the first step. */
+    private fun unlockGuide() {
+        val catalog = catalog ?: return displayModMessage("§cGreenhouse data is unavailable")
+        if (unlockStep == UnlockStep.RUNNING) return showUnlockStatus(catalog)
+        unlockStep = UnlockStep.READING
+        readStatus.clear(); readPages.clear()
+        displayModMessage("§aMutation unlock guide §7· go to the §fCarpenter§7 in your Greenhouse, open §fAll Mutations§7 and look at both pages")
+    }
+
+    /** The Carpenter's All Mutations menu: every mutation by name, with ANALYZED or UNKNOWN in its tooltip. */
+    @Subscription
+    fun onMutationsMenu(event: ContainerInitializedEvent) {
+        val catalog = catalog ?: return
+        if (!active() || !event.title.contains("Mutations", true)) return
+        val byName = catalog.plants.filter { it.mutation }.associateBy { nameKey(it.name) }
+        val page = sortedSetOf<String>()
+        val added = ArrayList<String>()
+        for (item in event.containerItems) {
+            if (item.isEmpty) continue
+            val plant = byName[nameKey(item.hoverName.string)] ?: continue
+            val status = parseMutationStatus(item.get(DataComponents.LORE)?.lines?.map { it.string }.orEmpty()) ?: continue
+            page += plant.id
+            if (status) { if (analyzed.add(plant.id)) added += plant.id } else analyzed.remove(plant.id)
+        }
+        if (page.isEmpty()) {
+            // Logged once a session so the menu can be read from the log if its format differs.
+            if (!menuLogged) SkyMyce.logger.info("Greenhouse: no mutation status in menu '{}': {}", event.title, event.containerItems.filterNot { it.isEmpty }.take(54).map { item ->
+                item.hoverName.string + " " + item.get(DataComponents.LORE)?.lines?.map { it.string }.orEmpty()
+            })
+            menuLogged = true
+            return
+        }
+        readStatus += page; readPages += page.joinToString()
+        statusReadAt = System.currentTimeMillis()
+        save(); revision++
+        if (unlockStep == UnlockStep.READING) {
+            val total = catalog.plants.count { it.mutation }
+            if (readStatus.size >= total || readPages.size >= 2) askUnlockCount(catalog)
+            else displayModMessage("§7Read ${readStatus.size} of $total mutations. Open the next page")
+        } else if (added.isNotEmpty()) analyzedChanged(added)
+    }
+
+    /** "GLOOMGOURD ANALYSIS COMPLETE": that mutation is analysed now. */
+    @Subscription
+    fun onAnalysisChat(event: ChatReceivedEvent.Pre) {
+        val catalog = catalog ?: return
+        if (!active()) return
+        val key = ANALYSIS_COMPLETE.find(event.text)?.groupValues?.get(1)?.let(::nameKey) ?: return
+        val plant = catalog.plants.firstOrNull { it.mutation && nameKey(it.name) == key } ?: return
+        if (analyzed.add(plant.id)) { save(); revision++; analyzedChanged(listOf(plant.id)) }
+    }
+
+    private val ANALYSIS_COMPLETE = Regex("^\\s*(.+?) ANALYSIS COMPLETE")
+
+    private fun askUnlockCount(catalog: PlantCatalog) {
+        val order = unlockOrder(catalog, analyzed, gardenLevel() ?: 15)
+        val total = catalog.plants.count { it.mutation }
+        displayModMessage("§a${total - order.ready.size - order.waiting.size - order.manual.size} of $total mutations analysed. " +
+            "§f${order.ready.size}§7 can be grown now, §f${order.waiting.size}§7 need another one first, §f${order.manual.size}§7 need special conditions")
+        val anchored = plots.filter { it.anchor != null }
+        when {
+            order.ready.isEmpty() && order.waiting.isEmpty() -> { unlockStep = UnlockStep.OFF; showManual(order) }
+            order.ready.isEmpty() -> { unlockStep = UnlockStep.OFF; showBlockers(order) }
+            anchored.isEmpty() -> { unlockStep = UnlockStep.OFF; displayModMessage("§eAnchor your greenhouses first: look at each one's corner soil and run /sm greenhouse anchor, then /sm greenhouse unlock") }
+            else -> {
+                unlockStep = UnlockStep.COUNT
+                val line = Component.literal("§eHow many greenhouses do you want to use? ")
+                (1..anchored.size).forEach { line.append(button("$it", "/sm greenhouse unlock count $it", "Use $it greenhouse${if (it == 1) "" else "s"}")) }
+                displayModMessage(line)
+            }
+        }
+    }
+
+    private fun chooseUnlockCount(count: Int) {
+        if (unlockStep != UnlockStep.COUNT) return displayModMessage("§7Run /sm greenhouse unlock to start the unlock guide")
+        val anchored = plots.filter { it.anchor != null }
+        if (count > anchored.size) return displayModMessage("§cYou have ${anchored.size} anchored greenhouses")
+        unlockCount = count
+        unlockPlots.clear()
+        if (count == anchored.size) { anchored.forEach { unlockPlots += it.name }; return startUnlock() }
+        unlockStep = UnlockStep.PICK
+        val line = Component.literal("§eWhich ${if (count == 1) "greenhouse" else "$count greenhouses"}? §7Their layouts are replaced. ")
+        anchored.forEach { plot ->
+            val now = plot.layout?.targets?.groupingBy { it.plantId }?.eachCount()?.let(::counted) ?: "no plan"
+            line.append(button("Plot ${plot.name}", "/sm greenhouse unlock pick ${plot.name}", "Plot ${plot.name}: $now"))
+        }
+        displayModMessage(line)
+    }
+
+    private fun pickUnlockPlot(name: String) {
+        if (unlockStep != UnlockStep.PICK) return displayModMessage("§7Run /sm greenhouse unlock to start the unlock guide")
+        val plot = plots.firstOrNull { it.name.equals(name, true) && it.anchor != null } ?: return displayModMessage("§cNo anchored Greenhouse plot named $name")
+        if (!unlockPlots.remove(plot.name)) unlockPlots += plot.name
+        if (unlockPlots.size >= unlockCount) return startUnlock()
+        displayModMessage("§7Picked ${unlockPlots.joinToString { "plot $it" }.ifEmpty { "none" }} §8· ${unlockCount - unlockPlots.size} more to pick")
+    }
+
+    private fun startUnlock() {
+        unlockStep = UnlockStep.RUNNING
+        unlockQueue.clear(); unlockQueue.addAll(unlockPlotList())
+        save()
+        displayModMessage("§aUnlock guide started on ${unlockPlots.joinToString { "plot $it" }}. §7A plot gets its next layout as soon as its mutations are analysed")
+        solveNextUnlock()
+    }
+
+    private fun stopUnlock() {
+        if (unlockStep == UnlockStep.OFF) return displayModMessage("§7The unlock guide is not running")
+        unlockStep = UnlockStep.OFF; unlockPlots.clear(); unlockQueue.clear()
+        save(); revision++
+        displayModMessage("§7Unlock guide stopped; the plots keep their layouts")
+    }
+
+    /** Marks a mutation analysed by hand, for when the game's message or menu was missed. */
+    private fun markAnalyzed(id: String) {
+        val plant = catalog?.get(id)?.takeIf { it.mutation } ?: return displayModMessage("§cUnknown mutation: $id")
+        if (!analyzed.add(plant.id)) return displayModMessage("§7${plant.name} is already analysed")
+        save(); revision++
+        analyzedChanged(listOf(plant.id))
+    }
+
+    private fun analyzedChanged(added: List<String>) {
+        if (unlockStep != UnlockStep.RUNNING) return
+        displayModMessage("§6✔ §a${names(added)} analysed")
+        advanceUnlock()
+    }
+
+    /** Queues every guide plot with nothing left to unlock for a new layout, or ends the guide when everything is done. */
+    private fun advanceUnlock() {
+        val catalog = catalog ?: return
+        val order = unlockOrder(catalog, analyzed, gardenLevel() ?: 15)
+        if (order.ready.isEmpty() && order.waiting.isEmpty()) {
+            unlockStep = UnlockStep.OFF; unlockPlots.clear(); unlockQueue.clear(); save()
+            displayModMessage("§6✔ §aEvery mutation the planner can lay out is analysed! §7Run /sm greenhouse auto on a plot for its most profitable layout")
+            return showManual(order)
+        }
+        for (plot in unlockPlotList()) if (wanted(plot).isEmpty() && plot !in unlockQueue) unlockQueue += plot
+        if (order.ready.isEmpty() && unlockPlotList().all { wanted(it).isEmpty() }) showBlockers(order)
+        solveNextUnlock()
+    }
+
+    /** Solves the next queued plot: its share of the mutations that can be grown now, the rest filled for profit. */
+    private fun solveNextUnlock() {
+        if (unlockStep != UnlockStep.RUNNING || solving) return
+        val catalog = catalog ?: return
+        // Resumed when the prices arrive.
+        if (prices.isEmpty()) { nextPoll = 0; pollPrices(System.currentTimeMillis()); return }
+        val plot = unlockQueue.removeFirstOrNull() ?: return
+        val order = unlockOrder(catalog, analyzed, gardenLevel() ?: 15)
+        val taken = unlockPlotList().filter { it !== plot && it !in unlockQueue }.flatMap(::wanted).toSet()
+        val free = order.ready.map { it.id }.filter { it !in taken }
+        // A fair share for each plot still waiting, so the first one does not take every mutation.
+        val offer = free.take(minOf(MAX_UNLOCK_TARGETS, (free.size + unlockQueue.size) / (unlockQueue.size + 1)))
+        if (offer.isEmpty() && plot.layout != null) {
+            displayModMessage("§7Plot ${plot.name} keeps its layout: nothing else can be grown for unlocking until more are analysed")
+            return solveNextUnlock()
+        }
+        // The filler is the most profitable mutation that can be bought and grown now.
+        val filler = rankMutations(catalog, prices, settings(plot)) { plant ->
+            allowed(plant) && plant.id in analyzed && plant.requires.keys.all { catalog[it]?.mutation != true || it in analyzed }
+        }.firstOrNull()?.plant?.id
+        val unlocked = unlocked(plot); val settings = settings(plot); val quotes = prices
+        val hash = UNLOCK + inputsHash(unlocked, offer + listOfNotNull(filler), settings, catalog, quotes)
+        solving = true
+        displayModMessage("§7Planning plot ${plot.name}" + (if (offer.isEmpty()) "…" else " to unlock ${names(offer)}…"))
+        worker.execute {
+            val result = runCatching { solveUnlockLayout(catalog, quotes, settings, unlocked, offer, listOfNotNull(filler), hash.hashCode().toLong(), System.currentTimeMillis(), hash) }
+            MC.instance.execute {
+                solving = false
+                result.onFailure { SkyMyce.logger.warn("Greenhouse unlock layout could not be solved", it) }
+                val solved = result.getOrNull()
+                if (unlockStep == UnlockStep.RUNNING && plot.name in unlockPlots) {
+                    if (solved == null) displayModMessage(if (offer.isEmpty()) "§7Nothing analysed can be planted on plot ${plot.name} yet"
+                        else "§cNo layout fits ${names(offer)} on plot ${plot.name} with its unlocked cells")
+                    else {
+                        val counts = solved.targets.groupingBy { it.plantId }.eachCount()
+                        val unlocking = counts.filterKeys { it in offer }
+                        plot.target = solved.targets.firstOrNull()?.plantId
+                        pin(plot, solved)
+                        displayModMessage("§aPlot ${plot.name}: " + (if (unlocking.isEmpty()) "" else "§6unlocking ${counted(unlocking)}") +
+                            (counts - unlocking.keys).takeIf { it.isNotEmpty() }?.let { "${if (unlocking.isEmpty()) "§7" else " §7· "}earning with ${counted(it)}" }.orEmpty() +
+                            ". §7/sm greenhouse missing lists what to get")
+                        (offer - unlocking.keys).takeIf { it.isNotEmpty() }?.let { displayModMessage("§7${names(it)} did not fit; another plot or a later layout gets them") }
+                    }
+                }
+                solveNextUnlock()
+            }
+        }
+    }
+
+    /** A harvested mutation on a guide plot still has to be analysed before the plot moves on. */
+    private fun unlockHarvested(plot: Plot, placement: Placement) {
+        if (unlockStep != UnlockStep.RUNNING || plot.name !in unlockPlots || placement.plantId !in wanted(plot) || !harvestHinted.add(placement.plantId)) return
+        val name = catalog?.get(placement.plantId)?.name ?: placement.plantId
+        displayModMessage(Component.literal("§aHarvested $name. §7Analyse it at the Carpenter; plot ${plot.name} then gets its next layout ")
+            .append(button("Already analysed", "/sm greenhouse unlock done ${placement.plantId}", "Mark $name as analysed")))
+    }
+
+    private fun showUnlockStatus(catalog: PlantCatalog) {
+        val order = unlockOrder(catalog, analyzed, gardenLevel() ?: 15)
+        val total = catalog.plants.count { it.mutation }
+        displayModMessage("§aUnlock guide §7· ${total - order.ready.size - order.waiting.size - order.manual.size} of $total mutations analysed" +
+            if (statusReadAt > 0) " §8(menu read ${age(System.currentTimeMillis() - statusReadAt)} ago)" else "")
+        for (plot in unlockPlotList()) {
+            val wanted = wanted(plot)
+            displayModMessage("§7Plot ${plot.name}: " + if (wanted.isEmpty()) "nothing to unlock right now" else "§6unlocking ${names(wanted)}")
+        }
+        val taken = unlockPlotList().flatMap(::wanted).toSet()
+        order.ready.map { it.id }.filter { it !in taken }.takeIf { it.isNotEmpty() }?.let { displayModMessage("§7Next up: ${names(it.take(8))}${if (it.size > 8) " +${it.size - 8} more" else ""}") }
+        if (order.ready.isEmpty()) showBlockers(order)
+        displayModMessage(Component.literal("§8Reopen All Mutations at the Carpenter to refresh. ").append(button("Stop", "/sm greenhouse unlock stop", "Stop the unlock guide; layouts stay")))
+    }
+
+    /** Why nothing can be grown: the mutations the waiting ones need first. */
+    private fun showBlockers(order: UnlockOrder) {
+        val locked = (order.waiting + order.manual).map { it.id }.toSet()
+        val blockers = order.manual.filter { manual -> order.waiting.any { manual.id in it.requires } }
+        val level = order.waiting.filter { plant -> plant.requires.keys.none { it in locked } }
+        if (level.isNotEmpty()) displayModMessage("§e${names(level.map { it.id })} need${if (level.size == 1) "s" else ""} a higher Garden level")
+        if (blockers.isNotEmpty()) displayModMessage("§eWaiting on mutations to grow by hand: " + blockers.joinToString("; ") { "§f${it.name}§e (${it.special ?: "no recipe"})" })
+        else if (level.isEmpty()) displayModMessage("§7Waiting for the guide plots' mutations to be analysed")
+    }
+
+    private fun showManual(order: UnlockOrder) {
+        if (order.manual.isEmpty()) return
+        displayModMessage("§7Still to grow by hand: " + order.manual.joinToString("; ") { "§f${it.name}§7 (${it.special ?: "no recipe"})" })
+    }
+
     // ---- Discord reminders --------------------------------------------------------------------------------------
 
     private const val REMINDER_INTERVAL = 5 * 60_000L
@@ -1514,10 +1792,11 @@ object GreenhousePlanner : SkyMyceModule() {
                 if (color != null) shown += Ghost(box, HudTheme.alpha(color, alpha))
                 val key = placement.row * GREENHOUSE_SIZE + placement.col
                 // Its water now, projected from the last level read: 20 a growth tick, falling evenly between ticks.
-                val water = plot.growth[key]?.takeIf { it.at >= (plot.spawned[key] ?: 0L) }?.let { reading ->
-                    reading.water?.let { waterAt(it, reading.at, now, growthCycle(), drainFor(plot, key, placement.plantId)) }
-                }
-                shownLabels += Label(Vec3(box.center.x, box.maxY + 0.5, box.center.z), growthLabel(plant.name, estimate, water))
+                val reading = plot.growth[key]?.takeIf { it.at >= (plot.spawned[key] ?: 0L) }
+                val water = reading?.water?.let { waterAt(it, reading.at, now, growthCycle(), drainFor(plot, key, placement.plantId)) }
+                // Enough when the tool said so, or the projection reaches ready before the water runs out.
+                val enough = water != null && (reading?.enough == true || estimate?.readyInMs != null)
+                shownLabels += Label(Vec3(box.center.x, box.maxY + 0.5, box.center.z), growthLabel(plant.name, estimate, water, enough))
             }
             if (!ingredient) targets += Triple(placement, planted, wasOccupied)
         }
@@ -1532,7 +1811,7 @@ object GreenhousePlanner : SkyMyceModule() {
             for ((placement, planted, wasOccupied) in targets) {
                 val key = placement.row * GREENHOUSE_SIZE + placement.col
                 if (previous != null && planted && !wasOccupied) { plot.spawned[key] = now; changed = true }
-                if (previous != null && !planted && wasOccupied) { recordHarvest(plot, current, placement, now); plot.growth.remove(key); changed = true }
+                if (previous != null && !planted && wasOccupied) { recordHarvest(plot, current, placement, now); unlockHarvested(plot, placement); plot.growth.remove(key); changed = true }
                 if (!planted && plot.spawned.remove(key) != null) changed = true
             }
             if (complete && previous != null && !plot.previousComplete) { plot.plantedAt = now; changed = true }
@@ -1546,13 +1825,15 @@ object GreenhousePlanner : SkyMyceModule() {
         ghosts = shown
         labels = shownLabels
         val cells = current.placements.sumOf { it.size * it.size }
-        val target = current.targets.firstOrNull()?.let { catalog[it.plantId]?.name } ?: "?"
+        val target = current.targets.groupingBy { it.plantId }.eachCount().entries.joinToString(", ") { (id, n) -> "${catalog[id]?.name ?: id} ×$n" }.ifEmpty { "? ×0" }
+        val unlocking = if (unlockStep == UnlockStep.RUNNING && plot.name in unlockPlots) wanted(plot) else emptyList()
         val holdingMissingCrop = held != null && plants.keys.any { held in catalog[it]!!.itemIds }
         val requirements = plants.entries.sortedByDescending { it.value }.map { "§7${catalog[it.key]?.name} §f×${it.value}" } +
             soils.entries.sortedByDescending { it.value }.map { "§7${soilName(it.key)} soil §f×${it.value}" }
         val limit = GreenhouseConfig.maxDisplayedRequirements
         hudLines = buildList {
-            add("§aGreenhouse${hudLabel(plot)} §7· $target ×${current.targets.size}")
+            add("§aGreenhouse${hudLabel(plot)} §7· $target")
+            if (unlocking.isNotEmpty()) add("§6Unlocking §f${names(unlocking)}")
             add("§f${rate(estimate(current))} §7est. · ${if (cells == 0) 0 else done * 100 / cells}% built")
             if (plants.isNotEmpty() && heldSoils.isEmpty() && !holdingMissingCrop) add("§eHold missing crop to preview spots")
             requirements.take(limit).forEach(::add)
@@ -1573,13 +1854,13 @@ object GreenhousePlanner : SkyMyceModule() {
     }
 
     /** A mutation's floating label: its name, growth stage with its estimated water, and estimated time to the next stage. */
-    private fun growthLabel(name: String, estimate: GrowthEstimate?, water: Double?): List<String> = listOfNotNull(
+    private fun growthLabel(name: String, estimate: GrowthEstimate?, water: Double?, enough: Boolean): List<String> = listOfNotNull(
         "§f$name",
         when {
             estimate == null -> "§7Analyze it to time its growth"
             estimate.stages == 0 -> "§aFully grown"
             else -> (if (estimate.ready) "§a" else if (estimate.paused) "§e" else "§c") + "Stage ${estimate.stage.toInt()}/${estimate.stages}" +
-                (if (estimate.paused) " · waiting on you" else "") + (water?.let { " §9${it.roundToInt()}" } ?: "")
+                (if (estimate.paused) " · waiting on you" else "") + (if (enough) " §6✔" else water?.let { " §9${it.roundToInt()}" } ?: "")
         },
         estimate?.nextInMs?.let { "§7Next stage in ${age(it)}" },
     )
@@ -1624,6 +1905,11 @@ object GreenhousePlanner : SkyMyceModule() {
             cycle?.let { c -> add("cycle", JsonArray().apply { add(c.tickAt); add(c.cycleMs); add(c.measured) }) }
             if (deskReadAt > 0) addProperty("deskReadAt", deskReadAt)
             if (remindersShared) addProperty("remindersShared", true)
+            add("unlock", JsonObject().apply {
+                add("analyzed", JsonArray().apply { analyzed.sorted().forEach(::add) })
+                if (statusReadAt > 0) addProperty("readAt", statusReadAt)
+                if (unlockStep == UnlockStep.RUNNING) add("plots", JsonArray().apply { unlockPlots.forEach(::add) })
+            })
         }
         writer.submit(json)
     }
@@ -1644,6 +1930,13 @@ object GreenhousePlanner : SkyMyceModule() {
         cycle = runCatching { json.getAsJsonArray("cycle").let { GrowthCycle(it[0].asLong, it[1].asLong.also { ms -> require(ms in 60_000L..86_400_000L) }, it[2].asBoolean) } }.getOrNull()
         deskReadAt = runCatching { json["deskReadAt"]?.asLong }.getOrNull() ?: 0L
         remindersShared = runCatching { json["remindersShared"]?.asBoolean }.getOrNull() == true
+        runCatching { json.getAsJsonObject("unlock")?.let { section ->
+            section.getAsJsonArray("analyzed")?.forEach { e -> runCatching { e.asString }.getOrNull()?.takeIf { catalog[it]?.mutation == true }?.let(analyzed::add) }
+            statusReadAt = section["readAt"]?.asLong ?: 0L
+            // A guide that was running carries on with the plots it had.
+            section.getAsJsonArray("plots")?.forEach { e -> runCatching { e.asString }.getOrNull()?.takeIf { it.matches(PLOT_NAME) }?.let(unlockPlots::add) }
+            if (unlockPlots.isNotEmpty()) unlockStep = UnlockStep.RUNNING
+        } }
         runCatching { json.getAsJsonArray("layouts").forEach { element -> runCatching { layoutFromJson(element.asJsonObject, catalog) }.getOrNull()?.let { layouts[it.inputsHash] = it } } }
         runCatching { json.getAsJsonObject("estimates").entrySet().forEach { (hash, value) -> runCatching {
             val pair = value.asJsonArray

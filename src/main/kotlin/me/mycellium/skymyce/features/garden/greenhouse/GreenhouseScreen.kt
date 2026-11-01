@@ -112,7 +112,8 @@ class GreenhouseScreen : MenuScreen(Component.literal("Greenhouses"), MenuPage.G
                 child(label("§l${plot.name}").apply { fontSize = 12f })
                 if (plot === GreenhousePlanner.selected()) child(GreenhouseBadge("Nearest", MenuTheme.ACCENT))
                 child(label(anchorText, MUTED).apply { fontSize = 8f; horizontalSizing(Sizing.expand()) })
-                child(label(if (layout == null) "No plan" else "$target ×${layout.targets.size}", if (layout == null) MUTED else MenuTheme.ACCENT).apply { fontSize = 12f })
+                child(label(if (layout == null) "No plan" else layout.targets.groupingBy { it.plantId }.eachCount().entries
+                    .joinToString(", ") { (id, n) -> "${catalog?.get(id)?.name ?: id} ×$n" }, if (layout == null) MUTED else MenuTheme.ACCENT).apply { fontSize = 12f })
             })
             if (layout == null) {
                 child(row().apply {
