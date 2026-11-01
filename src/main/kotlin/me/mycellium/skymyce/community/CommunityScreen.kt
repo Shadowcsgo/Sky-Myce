@@ -224,7 +224,7 @@ internal fun formatLeaderboardValue(value: Double, unit: String): String {
 /** The in-game and Discord views query the same consent-filtered persisted ranking service. */
 class LeaderboardScreen @JvmOverloads constructor(initialMetric: String = "dungeon_runs") : MenuScreen(Component.literal("Community Leaderboards")) {
     override val canonicalFeatureId get() = "leaderboards"
-    override val menuCategory get() = MenuCategory.UTILS
+    override val menuCategory get() = MenuCategory.COMMUNITY
     private val metrics = linkedMapOf("dungeon_runs" to "Dungeon runs", "dungeon_profit" to "Chest profit", "dungeon_run_time" to "Average Run Time", "rng_drops" to "RNG drops", "completed_tasks" to "Completed tasks")
     private var metric = initialMetric.takeIf { it in metrics } ?: "dungeon_runs"
     private var category = listOf("dungeons", "rng", "other").first { metric in leaderboardCategoryMetrics(it) }

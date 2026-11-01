@@ -156,7 +156,8 @@ fun main() {
         check(menuBackTarget(null, home = true, openedFromHome = true) == MenuBackTarget.Game)
     }
     measureNavigationGeometry()
-    check(menuSectionTitles == listOf("Dungeons", "Combat", "Economy", "Cosmetics", "Utils", "Settings"))
+    checkFlyoutIntent()
+    check(menuSectionTitles == listOf("Dungeons", "Gameplay", "Economy", "Community", "Appearance", "Settings"))
     val homeTools = defaultMenuHomeTools.indices.map { menuHomeFeature(it) }
     check(homeTools.map { it.id } == listOf("party-finder", "dungeon-tracker", "auction-browser", "player-utilities", "cosmetics", "daily-digest"))
     check(homeTools.all(::canUseMenuHomeTool)) { "A Home card opens a category or settings-only feature instead of a tool" }
@@ -285,4 +286,37 @@ fun main() {
     checkNavigationCornerOverrides()
     checkNativeHomeGlyphEdges()
     println("Menu navigation checks passed: stable logical card edges across hover/press/reveal profiles, native Home glyph edges, stationary categories and responsive home tiles, rapid final intent, bounded shortcuts, real tile previews and idle geometry/raster reuse")
+}
+
+/** Hover flyouts: delayed open, no flicker on paths that cross rows, grace when leaving, latest intent wins. */
+private fun checkFlyoutIntent() {
+    val ms = 1_000_000L
+    val intent = MenuFlyoutIntent()
+    check(intent.update(2, false, 0) == null && intent.update(2, false, 100 * ms) == null) { "Flyout opened before its hover delay" }
+    check(intent.update(2, false, 140 * ms) == 2) { "Flyout did not open after the hover delay" }
+    check(intent.update(3, false, 150 * ms) == 2 && intent.update(3, false, 200 * ms) == 2) { "Crossing a row on the way switched immediately" }
+    check(intent.update(null, false, 210 * ms) == 2 && intent.update(null, true, 400 * ms) == 2) { "Gap between rail and flyout closed it" }
+    check(intent.update(null, true, 5_000 * ms) == 2) { "Pointer inside the flyout lost it" }
+    check(intent.update(null, false, 5_100 * ms) == 2 && intent.update(null, false, 5_400 * ms) == null) { "Leaving did not close after the grace period" }
+    // Rapid sweep down the rail: only the row the pointer settles on opens, once.
+    val sweep = MenuFlyoutIntent()
+    var opened = 0; var last: Int? = null
+    for (step in 0 until 60) {
+        val row = minOf(step / 5, 5)
+        val shown = sweep.update(row, false, step * 20 * ms)
+        if (shown != last && shown != null) opened++
+        last = shown
+    }
+    check(last == 5 && opened == 1) { "Rapid rail sweep opened intermediate flyouts: $opened" }
+    val dismissed = MenuFlyoutIntent()
+    dismissed.update(1, false, 0); dismissed.update(1, false, 200 * ms)
+    dismissed.dismiss(1)
+    check(dismissed.update(1, false, 1_000 * ms) == null) { "Dismissed flyout reopened while still hovering its row" }
+    dismissed.update(null, false, 1_100 * ms)
+    dismissed.update(1, false, 1_200 * ms)
+    check(dismissed.update(1, false, 1_400 * ms) == 1) { "Returning to the row did not reopen" }
+    val keyboard = MenuFlyoutIntent()
+    keyboard.pin(4)
+    check(keyboard.update(null, false, 10_000 * ms) == 4) { "Keyboard-opened flyout closed without pointer movement" }
+    check(keyboard.update(0, false, 10_100 * ms) == 4 && keyboard.update(0, false, 10_200 * ms) == 0) { "Pointer did not take over a keyboard flyout" }
 }

@@ -37,8 +37,8 @@ enum class SettingsTab(val title: String) {
 fun settingsTab(path: String): SettingsTab = MenuCatalog.settingLocation(path).let { location -> when {
     location.featureId == "party-finder" -> SettingsTab.PARTY
     location.featureId == "daily-digest" -> SettingsTab.SOCIAL
-    location.subcategory == "Appearance" && location.category == MenuCategory.SETTINGS -> SettingsTab.THEME
-    location.category == MenuCategory.DUNGEONS || location.category == MenuCategory.COMBAT -> SettingsTab.COMBAT
+    location.featureId == "settings-appearance" || location.featureId == "settings-graphics" -> SettingsTab.THEME
+    location.category == MenuCategory.DUNGEONS || location.category == MenuCategory.GAMEPLAY -> SettingsTab.COMBAT
     else -> SettingsTab.GENERAL
 } }
 
@@ -285,7 +285,7 @@ class SettingsScreen @JvmOverloads constructor(
             } }
             val availability = owner.id == "party-finder" && "Dungeons/Dungeon Friends/availability" in extraPaths
             val preferences = owner.id == "party-finder" && extraPaths.any { it in setOf("Dungeons/Dungeon Friends/messageTemplate", "Dungeons/Dungeon Friends/titleNotifications") }
-            val hud = owner.id == "settings-hud" && (query.isBlank() && category == MenuCategory.SETTINGS && (!featureScoped || featureId == owner.id) || query.isNotBlank() && results.any { it.featureId == owner.id })
+            val hud = owner.id == "settings-hud" && (query.isBlank() && category == owner.category && (!featureScoped || featureId == owner.id) || query.isNotBlank() && results.any { it.featureId == owner.id })
             if (settings.isEmpty() && !availability && !preferences && !hud) return@forEach
             val reset = if (settings.isEmpty()) null else button("Reset section", 88, "Restore defaults for these displayed settings") {
                 settings.forEach { it.entry.reset() }

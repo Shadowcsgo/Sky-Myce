@@ -70,7 +70,7 @@ fun main() {
     check(previewRange.min == 50.0 && previewRange.max == 200.0)
     check(catalog.search("gif").any { it.featureId == irc.id })
     check(catalog.search("global skymyce chat").any { it.featureId == irc.id })
-    check(MenuCategory.entries.map { it.title } == listOf("Dungeons", "Combat", "Economy", "Cosmetics", "Utils", "Settings"))
+    check(MenuCategory.entries.map { it.title } == listOf("Dungeons", "Gameplay", "Economy", "Community", "Appearance", "Settings"))
     check(catalog.features.map { it.id }.distinct().size == catalog.features.size)
     MenuPage.entries.forEach { check(catalog.findFeature(it.featureId) != null) }
     check(catalog.features.map { it.category }.toSet() == MenuCategory.entries.toSet())
@@ -93,7 +93,7 @@ fun main() {
     check(catalog.findFeature("party-finder")!!.settings.any { it.path.startsWith("Dungeons/Dungeon Friends/") })
     check(catalog.features.none { it.id == "friends" || it.id == "dungeon-friends" })
     check(MenuCatalog.settingLocation("General/displayAbilityCooldown").featureId == "ability-cooldowns")
-    check(MenuCatalog.settingLocation("Mining/balNotify").category == MenuCategory.COMBAT)
+    check(MenuCatalog.settingLocation("Mining/balNotify").category == MenuCategory.GAMEPLAY)
     check(MenuCatalog.settingLocation("Dungeons/dungeonChestProfit").category == MenuCategory.DUNGEONS)
     check(MenuCatalog.settingLocation("General/Stash Helper/stashHelper").category == MenuCategory.ECONOMY)
     val globalPaths = catalog.features.filter { it.category == MenuCategory.SETTINGS }.flatMap { it.settings }.map { it.path }.toSet()
@@ -101,7 +101,7 @@ fun main() {
     for (key in listOf("mode")) {
         check(catalog.featureForPath("Community Sharing/$key")?.id == "community")
     }
-    check(catalog.featureForPath("Theme & Appearance/graphicsQuality")!!.id == "settings-appearance")
+    check(catalog.featureForPath("Theme & Appearance/graphicsQuality")!!.id == "settings-graphics")
     check(catalog.featureForPath("Theme & Appearance/preset")!!.id == "settings-appearance")
     check(catalog.featureForPath("openConfigKey")!!.id == "settings-controls")
     check(catalog.search("fortune").any { it.featureId == "mining" && it.settingPath != null })
@@ -111,16 +111,16 @@ fun main() {
     check(menuSearchWordMatches("fortune", "fortunne"))
     check(!menuSearchWordMatches("fortune", "fxrtxne"))
     val friends = catalog.search("friends")
-    check(friends.map { it.category }.toSet().containsAll(listOf(MenuCategory.DUNGEONS, MenuCategory.UTILS)))
+    check(friends.map { it.category }.toSet().containsAll(listOf(MenuCategory.DUNGEONS, MenuCategory.COMMUNITY)))
     check(friends.map { it.category.ordinal } == friends.map { it.category.ordinal }.sorted())
     check(catalog.search("ah").any { it.featureId == "auction-browser" })
     check(catalog.search("fps").any { it.settingPath == "Theme & Appearance/graphicsQuality" })
     check(catalog.search("animations").any { it.settingPath == "Theme & Appearance/graphicsQuality" })
     check(catalog.search("scale").any { it.featureId == "settings-hud" })
     check(catalog.search("keybind").any { it.settingPath == "openConfigKey" })
-    check(catalog.search("reduced motion").any { it.featureId == "settings-appearance" })
+    check(catalog.search("reduced motion").any { it.featureId == "settings-graphics" })
     val opacity = catalog.search("opacity").first { it.settingPath == "Dungeons/Starred Clear Routing/opacity" }
-    check(opacity.breadcrumb == "Dungeons → Routes → Dungeon Routing → Line opacity")
+    check(opacity.breadcrumb == "Dungeons → Routes and Navigation → Dungeon Routing → Line opacity")
     val onlySetting = menuSearchFeatureGroups(catalog, listOf(opacity))
     check(onlySetting.single().first.id == opacity.featureId && onlySetting.single().second == listOf(opacity)) {
         "Settings-only search lost its owning feature context"
@@ -200,5 +200,10 @@ fun main() {
     check(catalog.search("API fallback").none { it.settingPath?.endsWith("/hypixelApiKey") == true && it.quickSettingEligible })
     // Category terms can narrow a natural query without adding another feature home.
     check(catalog.search("economy friends").all { it.category == MenuCategory.ECONOMY || it.settingPath == "Community Sharing/economy" })
+    val everyday = me.mycellium.skymyce.commands.commandHelpLines("")
+    check(everyday.size == me.mycellium.skymyce.commands.commandHelp.count { it.everyday } + 1 && everyday.none { "ircaction" in it || "lfgreply" in it || "profile" in it })
+    check(me.mycellium.skymyce.commands.commandHelpLines("garden").any { "/sm greenhouse help" in it }) { "Help search missed advanced commands" }
+    check(me.mycellium.skymyce.commands.commandHelpLines("chat irc").any { "/sm irc" in it })
+    check(me.mycellium.skymyce.commands.commandHelpLines("zzzz").single().contains("No command matches"))
     println("Menu catalog checks passed: six categories, ${catalog.features.size} canonical features, ${rows.size} settings and searchable aliases")
 }

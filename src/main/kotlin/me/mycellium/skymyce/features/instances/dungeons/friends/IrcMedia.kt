@@ -1001,7 +1001,7 @@ internal class IrcMediaViewerScreen(private val previous: Screen?, private val m
     }
 
     private fun renderChrome(output: GuiGraphicsExtractor) {
-        val scale = minOf(me.mycellium.skymyce.ui.AutoGraphics.quality.rasterScale, 2560.0 / width.coerceAtLeast(1), 1440.0 / height.coerceAtLeast(1))
+        val scale = me.mycellium.skymyce.ui.menuRasterScale(width, height)
         chromeTexture.render(output, chrome, width, height, scale)
     }
     private fun centerLine(graphics: MenuGraphics, slot: Int, text: String, y: Int, color: Int, size: Double = 10.0) {

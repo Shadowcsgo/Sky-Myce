@@ -52,6 +52,9 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
     private var dropdown: MenuDropdown? = null
     private var dropdownAnchor: ButtonComponent? = null
     private var closingDropdown: MenuDropdown? = null
+    private val flyoutIntent = MenuFlyoutIntent()
+    private var flyout: MenuDropdown? = null
+    private var flyoutIndex: Int? = null
     private var content: FlowLayout? = null
     private var sidebar: FlowLayout? = null
     private var navigationSelection = MotionValue(0.0)
@@ -155,17 +158,48 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
         return result
     }
 
-    protected fun openMenuDropdown(anchor: ButtonComponent, options: (DropdownComponent) -> Unit): DropdownComponent {
+    protected fun openMenuDropdown(anchor: ButtonComponent, options: (DropdownComponent) -> Unit): DropdownComponent =
+        openMenuDropdown(anchor, beside = false, focus = true, options)
+    /** [beside] opens to the right of a stationary rail anchor without settling page motion; [focus] moves keyboard focus in. */
+    private fun openMenuDropdown(anchor: ButtonComponent, beside: Boolean, focus: Boolean, options: (DropdownComponent) -> Unit): MenuDropdown {
         closeMenuDropdown()
-        // Anchor geometry is retained, so settle its content before opening an interactive popup.
-        opening.snap(1.0); sidebarOpening.snap(1.0); pageOpening.snap(1.0); outgoing = null
-        paintedShell = shellPose(); paintedContent = contentPose()
-        val popup = MenuDropdown(anchor.width, ::closeMenuDropdown)
+        if (!beside) {
+            // Anchor geometry is retained, so settle its content before opening an interactive popup.
+            opening.snap(1.0); sidebarOpening.snap(1.0); pageOpening.snap(1.0); outgoing = null
+            paintedShell = shellPose(); paintedContent = contentPose()
+        }
+        val popup = MenuDropdown(if (beside) 120 else anchor.width, ::closeMenuDropdown)
         options(popup)
         dropdown = popup; dropdownAnchor = anchor
-        mountMenuDropdown(uiAdapter.rootComponent, popup, anchor.x, anchor.y + anchor.height, anchor.height)
-        popup.focusFirst()
+        if (beside) mountMenuDropdown(uiAdapter.rootComponent, popup, anchor.x + anchor.width + 6, anchor.y)
+        else mountMenuDropdown(uiAdapter.rootComponent, popup, anchor.x, anchor.y + anchor.height, anchor.height)
+        if (focus) popup.focusFirst()
         return popup
+    }
+    /** A category's subsections and features, beside its rail row. Commands and Home use the same destinations. */
+    private fun openFlyout(index: Int, keyboard: Boolean) {
+        val rail = sidebar as? MenuNavigation ?: return
+        val category = MenuCategory.entries[index]
+        val anchor = rail.categoryButton(index)
+        val popup = openMenuDropdown(anchor, beside = true, focus = keyboard) { popup ->
+            // The icon-only rail has no visible title; name the category first.
+            if (anchor.width < 92) popup.text(Component.literal(category.title).withStyle(net.minecraft.ChatFormatting.BOLD))
+            MenuDirectory.catalog.features.filter { it.category == category }.groupBy { it.subcategory }.forEach { (section, features) ->
+                popup.text(Component.literal(section))
+                features.forEach { feature -> popup.button(Component.literal(feature.title)) { openMenuFeature(feature.id) } }
+            }
+        }
+        // A hover flyout must not take focus or swallow the category click that follows it.
+        if (!keyboard) dropdownAnchor = null else flyoutIntent.pin(index)
+        flyout = popup; flyoutIndex = index
+    }
+    private fun updateFlyout(sx: Double, sy: Double, now: Long) {
+        val rail = sidebar as? MenuNavigation ?: return
+        if (flyout != null && dropdown !== flyout) { flyout = null; flyoutIndex = null; flyoutIntent.dismiss(rail.categoryAt(sx, sy)) }
+        if (dropdown != null && dropdown !== flyout) return
+        val wanted = flyoutIntent.update(rail.categoryAt(sx, sy), flyout?.pointer(sx, sy) != null, now)
+        if (wanted == flyoutIndex) return
+        if (wanted == null) { closeMenuDropdown(); flyout = null; flyoutIndex = null } else openFlyout(wanted, keyboard = false)
     }
     protected fun closeMenuDropdown(): Boolean {
         val popup = dropdown ?: return false
@@ -253,6 +287,7 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
     protected open fun buildNavigation(): FlowLayout = MenuNavigation(menuLayout.copy(height = maxOf(260, menuLayout.height)),
         { if (home) -1 else menuCategory?.ordinal ?: -1 }, navigationSelection,
         { index -> if (index == null) openMenu() else openMenuCategory(MenuCategory.entries[index]) },
+        { index -> openFlyout(index, keyboard = true) },
         { navigateMenu(MenuDirectoryScreen()) },
         { navigateMenu(MenuDirectoryScreen(view = MenuDirectoryView.QUICK)) },
         { navigateMenu(me.mycellium.skymyce.hud.widget.WidgetEditorScreen(this)) },
@@ -295,6 +330,7 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
         paintedContent = contentPose(pageProgress)
         val point = pointer(mouseX.toDouble(), mouseY.toDouble())
         val mx = point.first.toInt(); val my = point.second.toInt()
+        if (!closing && !modal) updateFlyout(paintedShell.inverseX(viewport.x(mouseX.toDouble())), paintedShell.inverseY(viewport.y(mouseY.toDouble())), now)
         tooltip.beginFrame()
         val custom = MenuGraphics(canvas, mx, my, width, height, tooltip)
         allowMenuMotionOverflow(uiAdapter.rootComponent)
@@ -310,7 +346,7 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
             toasts.draw(custom, width, height)
             canvas.group = null
         }
-        val scale = minOf(me.mycellium.skymyce.ui.AutoGraphics.quality.rasterScale, 2560.0 / width.coerceAtLeast(1), 1440.0 / height.coerceAtLeast(1))
+        val scale = menuRasterScale(width, height)
         texture.render(g, canvas, viewport.screenWidth, viewport.screenHeight, scale, width, height)
         if (!closing && dropdown == null && closingDropdown == null && pageProgress >= 1.0 && paintedShell.alpha >= .999 && paintedShell.scale >= .999) {
             extractNativeContent(g, viewport.screenWidth.toFloat() / width, viewport.screenHeight.toFloat() / height, partialTicks)
@@ -653,6 +689,44 @@ internal class MenuNavigationGeometry(layout: MenuLayout) {
     }
 }
 
+/**
+ * Hover intent for the rail's category flyouts. Opening waits briefly so a passing cursor does not trigger it; once
+ * open, another row must be held briefly (the path toward the flyout may cross it); leaving both the rail rows and
+ * the flyout closes it after a grace period. A keyboard-opened flyout stays until the pointer takes over.
+ */
+internal class MenuFlyoutIntent(private val openNanos: Long = 140_000_000, private val switchNanos: Long = 90_000_000,
+                                private val closeNanos: Long = 300_000_000) {
+    var open: Int? = null
+        private set
+    private var candidate: Int? = null
+    private var candidateSince = 0L
+    private var leftAt: Long? = null
+    private var pinned = false
+    private var suppressed: Int? = null
+
+    fun update(hovered: Int?, insideFlyout: Boolean, now: Long): Int? {
+        if (hovered != suppressed) suppressed = null
+        if (insideFlyout && open != null) { candidate = null; leftAt = null; pinned = false; return open }
+        if (hovered == null || hovered == suppressed) {
+            candidate = null
+            if (open != null && !pinned) {
+                val left = leftAt ?: now.also { leftAt = it }
+                if (now - left >= closeNanos) close()
+            }
+            return open
+        }
+        pinned = false; leftAt = null
+        if (hovered == open) { candidate = null; return open }
+        if (candidate != hovered) { candidate = hovered; candidateSince = now }
+        if (now - candidateSince >= if (open == null) openNanos else switchNanos) { open = hovered; candidate = null }
+        return open
+    }
+    fun pin(index: Int) { close(); open = index; pinned = true }
+    /** Closed another way (click, Escape, navigation): stay closed until the pointer leaves that row. */
+    fun dismiss(hovered: Int?) { close(); suppressed = hovered }
+    private fun close() { open = null; candidate = null; leftAt = null; pinned = false }
+}
+
 /** Small feedback stays inside the rail instead of shifting neighboring destinations. */
 internal fun menuNavigationPose(rect: MenuRect, hover: Double, press: Double, mode: GuiMotion): MotionPose =
     MotionPose(scale = 1 - mode.profile.pressScale * press,
@@ -758,11 +832,15 @@ internal fun paintMenuIcon(canvas: MenuCanvas, id: Int, x: Double, y: Double, si
 
 internal class MenuNavigation(private val layout: MenuLayout, private val activeSection: () -> Int,
                               private val indicator: MotionValue, private val action: (Int?) -> Unit,
+                              private val flyout: (Int) -> Unit,
                               search: () -> Unit, quick: () -> Unit, editHud: () -> Unit,
                               private val revealMode: () -> GuiMotion, private val revealReady: () -> Boolean,
                               private val home: Boolean) :
     FlowLayout(Sizing.fixed(layout.sidebar), Sizing.fixed(layout.height), Algorithm.VERTICAL) {
     private val geometry = MenuNavigationGeometry(layout)
+    private val categoryButtons = ArrayList<MenuButton>()
+    fun categoryButton(index: Int) = categoryButtons[index]
+    fun categoryAt(x: Double, y: Double) = geometry.indexAt(x, y)
     var revealsSettled = false
         private set
     init {
@@ -785,6 +863,10 @@ internal class MenuNavigation(private val layout: MenuLayout, private val active
             val rect = geometry.rect(index)
             val revealKey = "navigation/$index"
             child(object : MenuButton(Component.literal(title), { action(index) }) {
+                override fun onKeyPress(input: KeyEvent): Boolean {
+                    if (input.key() == GLFW.GLFW_KEY_RIGHT) { flyout(index); return true }
+                    return super.onKeyPress(input)
+                }
                 override fun interactionPose(hover: Double, press: Double) = menuNavigationPose(geometry.rect(index), hover, press, ThemeConfig.animationMode)
                 override fun paint(graphics: MenuGraphics, delta: Float, hover: Double, chosen: Double, press: Double) {
                     val mode = revealMode()
@@ -797,7 +879,7 @@ internal class MenuNavigation(private val layout: MenuLayout, private val active
             }.apply {
                 sizing(Sizing.fixed(rect.width.toInt()), Sizing.fixed(rect.height.toInt()))
                 positioning(Positioning.absolute(rect.x.toInt(), rect.y.toInt())); navigation = true; selected = { activeSection() == index }
-                tooltip(Component.literal("$title · ${MenuCategory.entries[index].description}"))
+                categoryButtons += this
             })
         }
         if (layout.height >= 360) child(utility("Edit HUD", 12, layout.height - 94) { editHud() })

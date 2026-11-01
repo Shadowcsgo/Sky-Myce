@@ -9,7 +9,6 @@ import me.mycellium.mixin.IrcChatScreenAccessor
 import me.mycellium.skymyce.SkyMyce
 import me.mycellium.skymyce.SkyMyceModule
 import me.mycellium.skymyce.config.misc.GlobalChatConfig
-import me.mycellium.skymyce.ui.AutoGraphics
 import me.mycellium.skymyce.ui.MenuCanvas
 import me.mycellium.skymyce.ui.MenuGraphics
 import me.mycellium.skymyce.ui.MenuTexture
@@ -817,7 +816,7 @@ internal object IrcEmojiPicker {
         output.nextStratum()
         output.pose().pushMatrix()
         output.pose().translate(bounds.x.toFloat(), bounds.y.toFloat())
-        val scale = minOf(AutoGraphics.quality.rasterScale, 2560.0 / screen.width.coerceAtLeast(1), 1440.0 / screen.height.coerceAtLeast(1))
+        val scale = me.mycellium.skymyce.ui.menuRasterScale(screen.width, screen.height)
         texture.render(output, canvas, bounds.width, bounds.height, scale)
         output.pose().popMatrix()
 

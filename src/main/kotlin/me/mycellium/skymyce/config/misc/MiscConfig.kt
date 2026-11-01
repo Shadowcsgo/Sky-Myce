@@ -68,7 +68,7 @@ object ThemeConfig : CategoryKt("Theme & Appearance") {
     }
     var graphicsQuality by enum(GuiQuality.AUTO) {
         name = TranslatableValue.literal("Graphics mode")
-        description = TranslatableValue.literal("Extremely Light and Light keep Sky-Myce's menus plain and turn GUI animations off. Medium adds sharper menus, shadows, glow and animations; High is the fullest. Auto keeps Medium animations. " +
+        description = TranslatableValue.literal("Extremely Light and Light keep Sky-Myce's menus plain and turn GUI animations off. Medium adds shadows, glow and animations; High is the fullest. Text is drawn at full resolution in every mode. Auto keeps Medium animations. " +
             "Auto (recommended) moves between these to hold 60 FPS, never above your frame limit; /sm graphics shows what it chose. HUD information is never reduced, and Minecraft's own settings are untouched.")
     }
     var menuIntroPlayed by boolean(false) { condition = { false } }

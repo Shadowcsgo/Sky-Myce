@@ -76,6 +76,7 @@ internal object SkijaMenuPainter {
     internal val pendingSnapshots = LinkedHashSet<SkijaMenuSnapshot>()
     internal val retiredSnapshots = LinkedHashSet<SkijaMenuSnapshot>()
     private val liveSnapshots = LinkedHashSet<SkijaMenuSnapshot>()
+    private val IDENTITY = MenuCanvas.Transform()
     private var paint: Paint? = null
     private var gradientEffect: RuntimeEffect? = null
     private val images = object : LinkedHashMap<BufferedImage, Image>(32, .75f, true) {
@@ -120,7 +121,7 @@ internal object SkijaMenuPainter {
             try {
                 command.clip?.let { canvas.clipRect(Rect.makeXYWH(it.x.toFloat(), it.y.toFloat(), it.width.toFloat(), it.height.toFloat())) }
                 val t = command.transform
-                canvas.concat(Matrix33(t.a.toFloat(), t.c.toFloat(), t.x.toFloat(), t.b.toFloat(), t.d.toFloat(), t.y.toFloat(), 0f, 0f, 1f))
+                if (t != IDENTITY) canvas.concat(Matrix33(t.a.toFloat(), t.c.toFloat(), t.x.toFloat(), t.b.toFloat(), t.d.toFloat(), t.y.toFloat(), 0f, 0f, 1f))
                 drawCommand(canvas, command, context)
             } finally { canvas.restoreToCount(saved) }
         }
@@ -222,9 +223,14 @@ object SkijaMenuFonts {
     var active = false
     private data class FontKey(val face: Int, val size: Float, val style: Int)
     private data class GlyphKey(var codepoint: Int, var size: Float, var style: Int)
-    private data class Glyph(val blob: TextBlob, val width: Double, val bounds: Rect)
+    private data class Glyph(val blob: TextBlob, val width: Double, val bounds: Rect, val id: Short, val face: Typeface)
+    private data class RunKey(val text: String, val size: Float, val style: Int)
+    /** One blob per consecutive same-typeface stretch of a run; offsets are from the run start. */
+    private class RunBlob(val pieces: Array<TextBlob>, val offsets: FloatArray, val width: Double)
     private data class Metrics(val ascent: Double, val height: Int)
     private var base: Typeface? = null
+    /** System fallback faces stay open so run blobs can be built from them; bounded by installed fonts. */
+    private val fallbackFaces = HashMap<Int, Typeface>()
     private var textPaint: Paint? = null
     private val lookup = GlyphKey(0, 0f, 0)
     private val fonts = object : LinkedHashMap<FontKey, Font>(64, .75f, true) {
@@ -234,6 +240,11 @@ object SkijaMenuFonts {
     private val glyphs = object : LinkedHashMap<GlyphKey, Glyph>(4096, .75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<GlyphKey, Glyph>?): Boolean =
             (size > 4096).also { if (it) eldest?.value?.blob?.close() }
+    }
+    // One native draw per run instead of per glyph: per-glyph draws were most of a repaint's CPU time.
+    private val runBlobs = object : LinkedHashMap<RunKey, RunBlob>(1024, .75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<RunKey, RunBlob>?): Boolean =
+            (size > 2048).also { if (it) eldest?.value?.pieces?.forEach(TextBlob::close) }
     }
     private val metrics = object : LinkedHashMap<Float, Metrics>(32, .75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Float, Metrics>?) = size > 32
@@ -265,15 +276,15 @@ object SkijaMenuFonts {
         glyphs[lookup]?.let { return it }
         val key = lookup.copy()
         val base = base()
-        val fallback = if (base.getUTF32Glyph(codepoint).toInt() == 0)
-            FontMgr.getDefault().matchFamilyStyleCharacter(null, style(key.style), null, codepoint) else null
-        val glyph = try {
-            val font = font(fallback ?: base, key.size, key.style)
-            val id = shortArrayOf(font.getUTF32Glyph(codepoint))
-            val width = font.getWidths(id)[0].toDouble()
-            val blob = requireNotNull(TextBlob.makeFromPosH(id, floatArrayOf(0f), 0f, font)) { "Skija could not prepare a menu glyph." }
-            Glyph(blob, width, blob.bounds)
-        } finally { fallback?.close() }
+        val face = if (base.getUTF32Glyph(codepoint).toInt() == 0)
+            FontMgr.getDefault().matchFamilyStyleCharacter(null, style(key.style), null, codepoint)?.let { found ->
+                fallbackFaces[found.uniqueId]?.also { found.close() } ?: found.also { fallbackFaces[it.uniqueId] = it }
+            } ?: base else base
+        val font = font(face, key.size, key.style)
+        val id = shortArrayOf(font.getUTF32Glyph(codepoint))
+        val width = font.getWidths(id)[0].toDouble()
+        val blob = requireNotNull(TextBlob.makeFromPosH(id, floatArrayOf(0f), 0f, font)) { "Skija could not prepare a menu glyph." }
+        val glyph = Glyph(blob, width, blob.bounds, id[0], face)
         // A TextBlob retains its typeface independently of the bounded styled-font cache.
         glyphs[key] = glyph
         return glyph
@@ -300,14 +311,9 @@ object SkijaMenuFonts {
             val alpha = ((run.color ushr 24) * opacity.coerceIn(0.0, 1.0)).roundToInt()
             paint.color = (alpha shl 24) or (run.color and 0xFFFFFF)
             val start = left
-            var index = 0
-            while (index < run.text.length) {
-                val codepoint = run.text.codePointAt(index)
-                val glyph = glyph(codepoint, run.bold, run.italic, size)
-                canvas.drawTextBlob(glyph.blob, left.toFloat(), baseline.toFloat(), paint)
-                left += glyph.width
-                index += Character.charCount(codepoint)
-            }
+            val blob = runBlob(run, size)
+            for (i in blob.pieces.indices) canvas.drawTextBlob(blob.pieces[i], (start + blob.offsets[i]).toFloat(), baseline.toFloat(), paint)
+            left += blob.width
             if (run.underline && left > start) {
                 paint.strokeWidth = .6f
                 canvas.drawLine(start.toFloat(), (baseline + 1).toFloat(), left.toFloat(), (baseline + 1).toFloat(), paint)
@@ -315,10 +321,45 @@ object SkijaMenuFonts {
         }
     }
 
-    internal fun cacheSizes() = mapOf("fonts" to fonts.size.toLong(), "glyphs" to glyphs.size.toLong(), "lineMetrics" to metrics.size.toLong())
+    private fun runBlob(run: MenuCanvas.Run, size: Double): RunBlob {
+        val style = (if (run.bold) 1 else 0) or (if (run.italic) 2 else 0)
+        val key = RunKey(run.text, fontSize(size), style)
+        runBlobs[key]?.let { return it }
+        val pieces = ArrayList<TextBlob>(); val offsets = ArrayList<Float>()
+        val ids = ShortArray(run.text.length); val xs = FloatArray(run.text.length)
+        var count = 0
+        var face: Typeface? = null
+        var batchStart = 0.0
+        var left = 0.0
+        fun flush() {
+            val current = face ?: return
+            if (count == 0) return
+            pieces += requireNotNull(TextBlob.makeFromPosH(ids.copyOf(count), xs.copyOf(count), 0f, font(current, key.size, style))) {
+                "Skija could not prepare menu text."
+            }
+            offsets += batchStart.toFloat(); count = 0
+        }
+        var index = 0
+        while (index < run.text.length) {
+            val codepoint = run.text.codePointAt(index)
+            val glyph = glyph(codepoint, run.bold, run.italic, size)
+            if (glyph.face !== face) { flush(); face = glyph.face }
+            if (count == 0) batchStart = left
+            ids[count] = glyph.id; xs[count] = (left - batchStart).toFloat(); count++
+            left += glyph.width
+            index += Character.charCount(codepoint)
+        }
+        flush()
+        return RunBlob(pieces.toTypedArray(), offsets.toFloatArray(), left).also { runBlobs[key] = it }
+    }
+
+    internal fun cacheSizes() = mapOf("fonts" to fonts.size.toLong(), "glyphs" to glyphs.size.toLong(), "lineMetrics" to metrics.size.toLong(),
+        "textRuns" to runBlobs.size.toLong())
     fun close() {
         active = false
+        runBlobs.values.forEach { it.pieces.forEach(TextBlob::close) }; runBlobs.clear()
         glyphs.values.forEach { it.blob.close() }; glyphs.clear()
+        fallbackFaces.values.forEach(Typeface::close); fallbackFaces.clear()
         fonts.values.forEach { it.close() }; fonts.clear(); metrics.clear()
         textPaint?.close(); textPaint = null
         base?.close(); base = null

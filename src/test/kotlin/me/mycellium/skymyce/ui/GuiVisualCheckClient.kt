@@ -211,6 +211,7 @@ class GuiVisualCheckClient : ClientModInitializer {
                 DailyDigest.screenClosed()
                 DailyDigestScreen("rng")
             },
+            Scene("home-flyout", ThemePreset.SIGNATURE) { MenuHomeScreen() },
             Scene("home-narrow", ThemePreset.SIGNATURE, 640, 480, 4) { MenuHomeScreen() },
             Scene("home-keyboard-narrow", ThemePreset.SIGNATURE, 640, 480, 4) { MenuHomeScreen() },
             Scene("themes-narrow", ThemePreset.LIGHT, 640, 480, 4) { SettingsScreen.forFeature(null, "settings-appearance") },
@@ -253,7 +254,9 @@ class GuiVisualCheckClient : ClientModInitializer {
             val components = ArrayList<UIComponent>()
             ui.rootComponent.collectDescendants(components)
             val control = components.first { component -> when (component) {
-                is MenuButton -> component.navigation == navigation && component.message.string == title
+                // Content tabs only; rail categories (e.g. "Community") share titles with tabs.
+                is MenuButton -> component.navigation == navigation && component.message.string == title &&
+                    generateSequence(component.parent()) { it.parent() }.none { it is MenuNavigation }
                 is MenuLabel -> component.text().string == title && component.canFocus(UIComponent.FocusSource.KEYBOARD_CYCLE)
                 else -> false
             } }
@@ -348,7 +351,7 @@ class GuiVisualCheckClient : ClientModInitializer {
                 8 -> {
                     val screen = checkNotNull(client.screen)
                     val components = arrayListOf<UIComponent>().apply { adapter(screen).rootComponent.collectDescendants(this) }
-                    val links = components.filterIsInstance<MenuButton>().filter { it.message.string in listOf("Dungeons", "→ Routes", "→ Dungeon Routing") && !it.navigation }
+                    val links = components.filterIsInstance<MenuButton>().filter { it.message.string in listOf("Dungeons", "→ Routes and Navigation", "→ Dungeon Routing") && !it.navigation }
                     check(links.size == 3 && links.all { link ->
                         val row = checkNotNull(link.parent())
                         link.canFocus(UIComponent.FocusSource.KEYBOARD_CYCLE) && link.width > 0 &&
@@ -357,7 +360,7 @@ class GuiVisualCheckClient : ClientModInitializer {
                     clickBreadcrumb("Dungeons"); checkBreadcrumbDirectory(null)
                 }
                 12, 22 -> navigateMenu(SettingsScreen.forFeature(null, "starred-routes"))
-                18 -> { clickBreadcrumb("→ Routes"); checkBreadcrumbDirectory("Routes") }
+                18 -> { clickBreadcrumb("→ Routes and Navigation"); checkBreadcrumbDirectory("Routes and Navigation") }
                 28 -> {
                     val previous = client.screen
                     press("→ Dungeon Routing")
@@ -407,7 +410,8 @@ class GuiVisualCheckClient : ClientModInitializer {
                     val components = arrayListOf<UIComponent>()
                     adapter(checkNotNull(client.screen)).rootComponent.collectDescendants(components)
                     val buttons = components.filterIsInstance<MenuButton>()
-                    val tabs = buttons.filter { it.message.string in listOf("Local history", "Community") }
+                    val tabs = buttons.filter { it.message.string in listOf("Local history", "Community") &&
+                        generateSequence(it.parent()) { parent -> parent.parent() }.none { parent -> parent is MenuNavigation } }
                     check(tabs.size == 2 && tabs.all { it.navigation && it.centeredNavigation }) {
                         "RNG Activity tabs lost their centered navigation style"
                     }
@@ -575,6 +579,20 @@ class GuiVisualCheckClient : ClientModInitializer {
                     }) { "The actual $id menu icon did not paint texture pixels: loaded=$loaded images=${images.size} textures=$textures bounds=${icon.x()},${icon.y()} ${icon.width()}×${icon.height()}" }
                 }
             }
+            if (current.name == "home-flyout" && ticks in listOf(10, 24)) {
+                val screen = checkNotNull(client.screen)
+                val components = arrayListOf<UIComponent>()
+                adapter(screen).rootComponent.collectDescendants(components)
+                if (ticks == 10) {
+                    // Hover the real rail row; the flyout must open after its delay without a click.
+                    val economy = components.filterIsInstance<MenuButton>().single { it.navigation && it.message.string == "Economy" }
+                    previousMouse = client.mouseHandler.xpos() to client.mouseHandler.ypos()
+                    testMouse(client, (economy.x() + economy.width() / 2.0) / screen.width * client.window.screenWidth,
+                        (economy.y() + economy.height() / 2.0) / screen.height * client.window.screenHeight)
+                } else check(components.filterIsInstance<MenuDropdown>().any { popup ->
+                    arrayListOf<UIComponent>().apply { popup.collectDescendants(this) }.filterIsInstance<MenuLabel>().any { it.text().string == "Garden and Greenhouse" }
+                }) { "Hovering Economy did not open its subsection flyout" }
+            }
             if (current.name == "dungeon-tracker-personal-rate-tooltip" && ticks == 18) {
                 check(trackerView().loot.single { it.item == "SHADOW_WARP_SCROLL" }.rateSample != null)
                 val screen = checkNotNull(client.screen)
@@ -616,7 +634,7 @@ class GuiVisualCheckClient : ClientModInitializer {
                     }
                     client.execute {
                         captured.getOrThrow()
-                        if (current.name.startsWith("dungeon-tracker-") || current.name == "daily-rng-local-history") {
+                        if (current.name.startsWith("dungeon-tracker-") || current.name == "daily-rng-local-history" || current.name == "home-flyout") {
                             trackerHistoryFixture?.restore(); trackerHistoryFixture = null
                             previousMouse?.let { (x, y) -> testMouse(client, x, y) }; previousMouse = null
                         }

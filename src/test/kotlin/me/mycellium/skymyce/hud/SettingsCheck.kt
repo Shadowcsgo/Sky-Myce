@@ -98,7 +98,7 @@ fun checkSettings() {
         check(scoped.all { catalog.featureForPath(it.path)?.id == feature.id }) { "Feature settings leaked unrelated controls" }
         check(scoped.map { it.path }.toSet() == commandRows.filter { catalog.featureForPath(it.path)?.id == feature.id }.map { it.path }.toSet())
     }
-    val searched = commandCenterSettings(catalog, commandRows, me.mycellium.skymyce.ui.MenuCategory.COSMETICS, "dungeon profit")
+    val searched = commandCenterSettings(catalog, commandRows, me.mycellium.skymyce.ui.MenuCategory.APPEARANCE, "dungeon profit")
     check(searched.any { it.path.startsWith("Dungeons/") } && searched.any { it.path == "Community Sharing/mode" } &&
         searched.none { it.path.startsWith("Cosmetics/") }) { "Search must override the sidebar category and include matching community privacy controls" }
     val sharingSettings = settingGroups(rows, "community").values.flatten()
@@ -120,7 +120,9 @@ fun checkSettings() {
     check(settingsTab("Theme & Appearance/preset") == SettingsTab.THEME)
     check(rows.any { it.path == "General/Party Commands/hypixelApiKey" }) // Existing storage path retained.
     check(settingGroups(rows, "settings-controls").values.flatten().single().path == "openConfigKey")
-    check(settingGroups(rows, "settings-appearance").values.flatten().map { it.path } == listOf("Theme & Appearance/preset", "Theme & Appearance/graphicsQuality")) { settingGroups(rows, "settings-appearance").toString() }
+    check(settingGroups(rows, "settings-appearance").values.flatten().map { it.path } == listOf("Theme & Appearance/preset")) { settingGroups(rows, "settings-appearance").toString() }
+    check(settingGroups(rows, "settings-graphics").values.flatten().map { it.path } == listOf("Theme & Appearance/graphicsQuality"))
+    check(settingsTab("Theme & Appearance/graphicsQuality") == SettingsTab.THEME)
     check(settingGroups(rows, "party-finder").values.flatten().all {
         it.path.startsWith("Party Finder/") || it.path.startsWith("Dungeons/Dungeon Friends/")
     })
@@ -144,7 +146,7 @@ fun checkSettings() {
     check(settingsFocusPath("devMode", "MisterKrister") == "devMode") { "A direct setting link lost priority over friend preferences" }
     val routing = catalog.findFeature("starred-routes")!!
     check(settingsBreadcrumbLinks(routing.category, routing) == listOf(
-        SettingsBreadcrumbLink("Dungeons"), SettingsBreadcrumbLink("Routes", section = "Routes"),
+        SettingsBreadcrumbLink("Dungeons"), SettingsBreadcrumbLink("Routes and Navigation", section = "Routes and Navigation"),
         SettingsBreadcrumbLink("Dungeon Routing", featureId = "starred-routes"),
     )) { "Settings breadcrumbs must target their category, filtered section and canonical feature" }
     check(settingsBreadcrumbLinks(routing.category, null) == listOf(SettingsBreadcrumbLink("Dungeons")))
@@ -307,8 +309,8 @@ private fun checkMenuGraphicsChanges() {
             canvas.begin()
             canvas.gradient(0.0, 0.0, size.first.toDouble(), size.second.toDouble(), -1, 0x80AC7BF1.toInt(), 0, -1)
             canvas.text(listOf(MenuCanvas.Run("Graphics: $quality ✓", -1)), 7.25, 9.5)
-            val image = canvas.finish(size.first, size.second, quality.rasterScale)
-            check(image.width == (size.first * quality.rasterScale).toInt() && image.height == (size.second * quality.rasterScale).toInt())
+            val image = canvas.finish(size.first, size.second, quality.density)
+            check(image.width == (size.first * quality.density).toInt() && image.height == (size.second * quality.density).toInt())
             check(canvas.dirtyRegion == java.awt.Rectangle(0, 0, image.width, image.height)) { "Quality/size change did not replace all pixels" }
             val upload = IntArray(image.width * image.height)
             me.mycellium.skymyce.ui.menuTexturePixels(image, upload)
@@ -733,3 +735,6 @@ private fun writeMenuCanvasArtifact() {
     check(ImageIO.write(canvas.finish(1100, 650, 1.0), "png", output))
     println("Custom canvas checks passed; visual artifact: ${output.absolutePath}")
 }
+
+/** Window densities the canvas must handle; quality no longer selects one (text always renders at native density). */
+private val me.mycellium.skymyce.ui.GuiQuality.density get() = when (this) { me.mycellium.skymyce.ui.GuiQuality.EXTREMELY_LIGHT -> 1.0; me.mycellium.skymyce.ui.GuiQuality.LIGHT -> 1.25; me.mycellium.skymyce.ui.GuiQuality.HIGH -> 2.0; else -> 1.5 }

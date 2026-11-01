@@ -35,7 +35,7 @@ import org.joml.Vector3f
 
 /** One Save equips locally and, when connected, publishes the same appearance to the community. */
 class CosmeticsScreen(private val link: Boolean = false, private val focusPath: String? = null) : MenuScreen(Component.literal("Cosmetics Studio"), MenuPage.COSMETICS) {
-    override val menuCategory get() = MenuCategory.COSMETICS
+    override val menuCategory get() = MenuCategory.APPEARANCE
     private val studio = CosmeticsStudio()
     private var draft = CosmeticProfile(MC.instance.user.profileId, null, 1f, 0, 0)
     private var nameJson: com.google.gson.JsonElement? = null

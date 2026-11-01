@@ -330,6 +330,32 @@ public final class SkijaGpuCheck {
             report("Skija 60 cards 960x540@2 CPU including commands/state/draw/submit", changing);
             report("Skija isolated GPU elapsed (texture paint only)", gpu);
             report("Skija retained idle CPU (no repaint/submit)", idle);
+            // Former Medium/Light raster scales: what lowering text resolution actually saved.
+            for (double scale : new double[] {1.5, 1.25}) {
+                long[] cpu = new long[121], elapsed = new long[121];
+                int[] timers = new int[121];
+                for (int index = 0; index < cpu.length; index++) {
+                    timers[index] = glGenQueries();
+                    long start = System.nanoTime();
+                    glBeginQuery(GL_TIME_ELAPSED, timers[index]);
+                    drawBenchmark(context, surface, scene(canvas, index + 3, scale));
+                    glEndQuery(GL_TIME_ELAPSED);
+                    cpu[index] = System.nanoTime() - start;
+                }
+                context.flushAndSubmit(true);
+                for (int index = 0; index < timers.length; index++) {
+                    elapsed[index] = glGetQueryObjectui64(timers[index], GL_QUERY_RESULT); glDeleteQueries(timers[index]);
+                }
+                report("Skija 60 cards 960x540@" + scale + " CPU", cpu);
+                report("Skija 60 cards 960x540@" + scale + " GPU", elapsed);
+            }
+            long[] guard = new long[121];
+            for (int index = 0; index < guard.length; index++) {
+                long start = System.nanoTime();
+                try (var restore = new SkijaGlState()) { }
+                guard[index] = System.nanoTime() - start;
+            }
+            report("GL state save/restore alone", guard);
         } finally {
             canvas.close(); SkijaMenuPainter.INSTANCE.close(); SkijaMenuFonts.INSTANCE.setActive(false);
             glDeleteFramebuffers(fbo); glDeleteRenderbuffers(stencil); glDeleteTextures(texture);
@@ -345,7 +371,9 @@ public final class SkijaGpuCheck {
         }
     }
 
-    private static MenuCanvas.Frame scene(MenuCanvas canvas, int tick) {
+    private static MenuCanvas.Frame scene(MenuCanvas canvas, int tick) { return scene(canvas, tick, 2); }
+
+    private static MenuCanvas.Frame scene(MenuCanvas canvas, int tick, double scale) {
         canvas.begin();
         canvas.fill(0, 0, 960, 540, 0xA5090608); canvas.fill(8, 8, 944, 524, 0xFF201116);
         canvas.fill(8, 8, 165, 524, 0xFF10090C);
@@ -364,7 +392,7 @@ public final class SkijaGpuCheck {
             canvas.arc(x + 364, y + 13, 5, 0, 360, 0xFFDF8196, 0);
         }
         canvas.setClip(null); canvas.fill(186, 531, (tick % 100) * 5, 3, 0xFFDF8196);
-        return canvas.finishFrame(960, 540, 2);
+        return canvas.finishFrame(960, 540, scale);
     }
 
     private static void report(String label, long[] times) {

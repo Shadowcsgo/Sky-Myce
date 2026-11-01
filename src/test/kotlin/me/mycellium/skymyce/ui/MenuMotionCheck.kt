@@ -134,7 +134,6 @@ fun main() {
     check(!rapid.sample().isNaN() && !rapid.running && rapid.sample() == .75)
 
     val qualities = GuiQuality.entries.filter { it != GuiQuality.AUTO } // Auto draws with one of these tiers.
-    check(qualities.map { it.rasterScale } == listOf(1.0, 1.25, 1.5, 2.0))
     check(qualities.map { it.shadowLayers } == listOf(0, 1, 2, 3))
     check(qualities.take(2).all { !it.glow && !it.ambient && it.ambientIntervalNanos == 0L })
     check(GuiQuality.MEDIUM.ambientIntervalNanos == 100_000_000L && GuiQuality.HIGH.ambientIntervalNanos == 50_000_000L)
@@ -900,13 +899,13 @@ private fun checkMotionCanvas() {
     for (quality in GuiQuality.entries) {
         val flat = MenuCanvas(); flat.begin(); flat.fill(0.0, 0.0, 44.0, 32.0, 0xFF171021.toInt())
         flat.gradient(4.0, 4.0, 36.0, 24.0, 0xB0875BA0.toInt(), 0xB0875BA0.toInt(), 0xB0875BA0.toInt(), 0xB0875BA0.toInt())
-        val image = flat.finish(44, 32, quality.rasterScale)
-        val first = (4 * quality.rasterScale).toInt() + 2
-        val last = (28 * quality.rasterScale).toInt() - 3
-        val x = (22 * quality.rasterScale).toInt()
+        val image = flat.finish(44, 32, quality.density)
+        val first = (4 * quality.density).toInt() + 2
+        val last = (28 * quality.density).toInt() - 3
+        val x = (22 * quality.density).toInt()
         val color = image.getRGB(x, first)
         for (y in first..last) check(image.getRGB(x, y) == color) {
-            "$quality flat gradient varies at raster scale ${quality.rasterScale}, row $y: " +
+            "$quality flat gradient varies at raster scale ${quality.density}, row $y: " +
                 "expected 0x${color.toUInt().toString(16)}, actual 0x${image.getRGB(x, y).toUInt().toString(16)}"
         }
         flat.close()
@@ -924,7 +923,7 @@ private fun checkMotionCanvas() {
         repeat(frames) { index ->
             val phase = if (moving) (index % 21) / 20.0 else 0.0
             motionScene(canvas, quality, phase = phase, snapshot = snapshot, transitionProgress = .1 + .8 * phase)
-            canvas.finish(480, 280, quality.rasterScale)
+            canvas.finish(480, 280, quality.density)
             dirtyPixels += canvas.dirtyRegion?.let { it.width.toLong() * it.height } ?: 0
         }
         val wall = (System.nanoTime() - start) / frames / 1_000_000.0
@@ -939,11 +938,11 @@ private fun checkMotionCanvas() {
     val reports = mutableListOf("Headless 480x280 raster fixture; 24 warm-up and 60 measured frames per quality. These measurements do not represent Minecraft FPS or GPU frame time.")
     for (quality in GuiQuality.entries) {
         val canvas = MenuCanvas()
-        repeat(24) { motionScene(canvas, quality, phase = (it % 21) / 20.0); canvas.finish(480, 280, quality.rasterScale) }
-        motionScene(canvas, quality); val image = canvas.finish(480, 280, quality.rasterScale); val revision = canvas.revision
+        repeat(24) { motionScene(canvas, quality, phase = (it % 21) / 20.0); canvas.finish(480, 280, quality.density) }
+        motionScene(canvas, quality); val image = canvas.finish(480, 280, quality.density); val revision = canvas.revision
         repeat(25) {
             motionScene(canvas, quality)
-            check(canvas.finish(480, 280, quality.rasterScale) === image && canvas.revision == revision && canvas.dirtyRegion == null) {
+            check(canvas.finish(480, 280, quality.density) === image && canvas.revision == revision && canvas.dirtyRegion == null) {
                 "$quality repainted a static frame or continuously recreated its raster"
             }
         }
@@ -952,11 +951,11 @@ private fun checkMotionCanvas() {
         println(report); reports += report
         val cache = MenuCanvas::class.java.getDeclaredField("gradients").apply { isAccessible = true }
         check((cache.get(canvas) as Map<*, *>).size <= 4) { "$quality retained unbounded gradient images" }
-        motionScene(canvas, quality); canvas.finish(480, 280, quality.rasterScale)
+        motionScene(canvas, quality); canvas.finish(480, 280, quality.density)
         val transitionSnapshot = checkNotNull(canvas.snapshot("body"))
         repeat(24) {
             motionScene(canvas, quality, phase = .5, snapshot = transitionSnapshot, transitionProgress = .1 + .8 * (it % 21) / 20)
-            canvas.finish(480, 280, quality.rasterScale)
+            canvas.finish(480, 280, quality.density)
         }
         val cachedGradients = (cache.get(canvas) as Map<*, *>).values.toList()
         val transitionReport = "Headless menu renderer $quality active page blend: ${measure(canvas, quality, true, transitionSnapshot)}"
@@ -965,10 +964,10 @@ private fun checkMotionCanvas() {
             "$quality recreated warmed gradient images on each active page frame"
         }
         check((cache.get(canvas) as Map<*, *>).size <= 4) { "$quality retained unbounded page gradient images" }
-        ImageIO.write(canvas.finish(480, 280, quality.rasterScale), "png", File("motion-${quality.name.lowercase().replace('_', '-')}-page-blend.png"))
+        ImageIO.write(canvas.finish(480, 280, quality.density), "png", File("motion-${quality.name.lowercase().replace('_', '-')}-page-blend.png"))
         canvas.releaseTransition()
         check(canvas.cacheSizes().getValue("transitionBytes") == 0L) { "Settled page retained its temporary blend buffers" }
-        motionScene(canvas, quality); canvas.finish(480, 280, quality.rasterScale)
+        motionScene(canvas, quality); canvas.finish(480, 280, quality.density)
         canvas.close()
         check((cache.get(canvas) as Map<*, *>).isEmpty()) { "Closed renderer retained gradients" }
         for (name in listOf("pending", "previous")) {
@@ -987,7 +986,7 @@ private fun checkMotionCanvas() {
         Triple("off", MotionPose(), GuiMotion.OFF),
     )) {
         val canvas = MenuCanvas(); motionScene(canvas, GuiQuality.HIGH, pose, .7, mode)
-        ImageIO.write(canvas.finish(480, 280, GuiQuality.HIGH.rasterScale), "png", File("motion-high-$name.png"))
+        ImageIO.write(canvas.finish(480, 280, 2.0), "png", File("motion-high-$name.png"))
         canvas.close()
     }
 }
@@ -1042,3 +1041,6 @@ private fun motionScene(canvas: MenuCanvas, quality: GuiQuality, pose: MotionPos
         canvas.transform = transform
     }
 }
+
+/** Window densities the canvas must handle; quality no longer selects one (text always renders at native density). */
+private val GuiQuality.density get() = when (this) { GuiQuality.EXTREMELY_LIGHT -> 1.0; GuiQuality.LIGHT -> 1.25; GuiQuality.HIGH -> 2.0; else -> 1.5 }

@@ -29,6 +29,47 @@ import net.fabricmc.fabric.api.client.command.v2.ClientCommands.literal
 import net.fabricmc.fabric.api.client.command.v2.ClientCommands.argument
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource
 
+/** Player-facing commands only: chat-button callbacks, legacy aliases and developer tools stay out of help. */
+internal data class CommandHelp(val command: String, val description: String, val everyday: Boolean, val keywords: String = "")
+internal val commandHelp = listOf(
+    CommandHelp("/sm", "Open the Sky-Myce menu (search, categories and your tools)", true, "menu home gui"),
+    CommandHelp("/sm settings", "Open Settings", true, "config options"),
+    CommandHelp("/sm hud", "Arrange HUD widgets", true, "overlay layout widgets"),
+    CommandHelp("/sm bars", "Arrange status bars", true, "health mana hud"),
+    CommandHelp("/sm pf", "Party Finder: online dungeon friends and LFG", true, "party finder lfg dungeon friends"),
+    CommandHelp("/sm dungeon", "Dungeon Tracker: runs, loot and rewards", true, "tracker loot profit"),
+    CommandHelp("/sm splits", "Dungeon Splits: live splits and personal bests", true, "timer pb"),
+    CommandHelp("/sm crush-camera", "Crush Camera views for F7/M7 Storm", false, "healer storm"),
+    CommandHelp("/sm m7pb [player]", "Look up an M7 personal best", true, "pb lookup"),
+    CommandHelp("/sm ah", "Auction Browser", true, "auction house market"),
+    CommandHelp("/sm greenhouse", "Greenhouse profit ranking; /sm greenhouse gui opens the planner", true, "garden mutation planner"),
+    CommandHelp("/sm greenhouse help", "All greenhouse shortcuts (plan, auto, anchor, missing, unlock…)", false, "garden mutation planner"),
+    CommandHelp("/sm journal", "RNG Journal", true, "rng drops history"),
+    CommandHelp("/sm digest", "Daily Digest", true, "news daily"),
+    CommandHelp("/sm friends", "Friends and player activity", true, "players social"),
+    CommandHelp("/sm leaderboard", "Community leaderboards", true, "rank"),
+    CommandHelp("/sm community", "Discord connection, sharing and updates", false, "discord account privacy"),
+    CommandHelp("/sm cosmetics", "Player cosmetics", true, "appearance names"),
+    CommandHelp("/sm irc [message]", "Global Minecraft/Discord chat (alias /sm global); add a message to send once. In chat, click ↩ to reply, + to react, ⋯ to edit", true, "chat global discord"),
+    CommandHelp("/sm party [message]", "Minecraft-only Party IRC (alias /sm pc)", true, "chat party irc"),
+    CommandHelp("/sm msg <name> <message>", "Direct message; /sm reply (or /sm r) answers the last one", true, "dm whisper chat"),
+    CommandHelp("/sm chat [name]", "Open a conversation, or leave relay chat", false, "dm irc exit"),
+    CommandHelp("/sm ircstatus", "IRC connection status", false, "chat"),
+    CommandHelp("/sm route", "Dungeon routing status; /sm route reload reloads rooms", false, "routing blood"),
+    CommandHelp("/sm goldor", "Goldor coordination status, roles and guide", false, "terminals p3 f7 m7"),
+    CommandHelp("/sm graphics", "What Auto graphics chose and why", false, "fps performance quality"),
+)
+
+/** `/sm help` lists everyday commands; a query searches every player-facing one by name, description or keyword. */
+internal fun commandHelpLines(query: String): List<String> {
+    val words = query.lowercase().split(' ').filter(String::isNotBlank)
+    val matches = if (words.isEmpty()) commandHelp.filter { it.everyday }
+        else commandHelp.filter { entry -> "${entry.command} ${entry.description} ${entry.keywords}".lowercase().let { text -> words.all(text::contains) } }
+    if (matches.isEmpty()) return listOf("§7No command matches \"$query\". Everything is also in the menu: open /sm and search.")
+    val header = if (words.isEmpty()) "§bCommands §7(shortcuts; everything is also in the /sm menu). §f/sm help <word>§7 searches all." else "§bCommands matching \"$query\":"
+    return listOf(header) + matches.map { "§f${it.command} §7— ${it.description}" }
+}
+
 internal fun relayChannelCommand(name: String, select: () -> Unit, send: (String) -> Unit) =
     literal(name).executes { select(); 1 }
         .then(argument("message", StringArgumentType.greedyString()).executes {
@@ -106,7 +147,10 @@ object SkyMyceCommands : SkyMyceModule() {
                 RelayMessages.chatAction("/sm ircaction " + StringArgumentType.getString(it, "action")); 1
             }))
             .then(relayChannelCommand("pc", RelayMessages::selectParty, RelayMessages::sendParty))
-            .then(literal("help").executes { RelayMessages.chatHelp(); 1 })
+            .then(literal("help").executes { commandHelpLines("").forEach(me.mycellium.skymyce.utils.Utils::displayModMessage); 1 }
+                .then(argument("query", StringArgumentType.greedyString()).executes {
+                    commandHelpLines(StringArgumentType.getString(it, "query")).forEach(me.mycellium.skymyce.utils.Utils::displayModMessage); 1
+                }))
             .then(literal("community").executes {
                 MC.instance.execute { navigateMenu(me.mycellium.skymyce.community.CommunityScreen()) }; 1
             })

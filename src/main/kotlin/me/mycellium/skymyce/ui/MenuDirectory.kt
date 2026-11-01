@@ -362,12 +362,12 @@ internal fun featureEnabled(feature: MenuFeature): Boolean? = enabledSetting(fea
 
 /** UI identities are independent of saved Resourceful Config category names and keys. */
 enum class MenuCategory(val title: String, val description: String, val iconId: Int) {
-    DUNGEONS("Dungeons", "Dungeon parties, routes, rewards and run history", 4),
-    COMBAT("Combat", "Ability timers, equipment and instance helpers", 9),
-    ECONOMY("Economy", "Auctions, the Garden and item values", 5),
-    COSMETICS("Cosmetics", "Player names, visual scaling and cosmetic selection", 6),
-    UTILS("Utils", "Daily progress, social tools and general helpers", 1),
-    SETTINGS("Settings", "Configure controls, graphics, HUD and appearance", 8),
+    DUNGEONS("Dungeons", "Parties, routes, boss coordination, run tracking and rewards", 4),
+    GAMEPLAY("Gameplay", "Combat and abilities, mining, inventory helpers, instances and information", 9),
+    ECONOMY("Economy", "Auctions, the Garden, item values and stash value", 5),
+    COMMUNITY("Community", "IRC chat, friends, leaderboards, the RNG Journal and Daily Digest", 1),
+    APPEARANCE("Appearance", "Player cosmetics, HUD and widgets, themes and colors", 6),
+    SETTINGS("Settings", "Controls, performance and graphics, privacy and account", 8),
 }
 
 data class MenuFeature(
@@ -433,41 +433,42 @@ class MenuCatalog(rows: List<SettingRow>) {
 
     companion object {
         val definitions = listOf(
-            MenuFeature("community", "Discord & Community", "Connect Discord, choose community data sharing (On, On (anon) or Off) and updates", MenuCategory.SETTINGS, "Community", listOf("discord", "connect", "privacy", "sharing", "updates", "account"), tool = "community"),
-            MenuFeature("leaderboards", "Community Leaderboards", "Compare consenting participants with source labels and UTC periods", MenuCategory.UTILS, "Progress", listOf("rank", "ranking", "economy", "dungeons", "rng", "weekly", "monthly"), tool = "leaderboards"),
-            MenuFeature("rng-journal", "RNG Journal", "Search preserved personal acquisitions, dates, counts and measured history", MenuCategory.UTILS, "Progress", listOf("rare", "drops", "history", "journal", "rng", "weekly", "monthly"), tool = "rng-journal"),
-            MenuFeature("party-finder", "Party Finder", "Online dungeon friends, LFG availability, invites and party filters", MenuCategory.DUNGEONS, "Parties", listOf("party", "friends", "lfg", "availability", "dungeon-friends", "secondary classes"), tool = "party-finder", enabledPath = "Dungeons/Dungeon Friends/enabled"),
-            MenuFeature("starred-routes", "Dungeon Routing", "Follow doors toward Blood, optionally visiting starred mobs", MenuCategory.DUNGEONS, "Routes", listOf("route", "path", "blood", "wither", "healer", "starred", "mobs", "fairy", "straight", "starred clear routing"), enabledPath = "Dungeons/Starred Clear Routing/enabled"),
-            MenuFeature("dungeon-tracker", "Dungeon Tracker", "Run history, loot records and estimated dungeon rewards", MenuCategory.DUNGEONS, "Runs", listOf("loot", "profit", "bazaar", "history", "rng"), tool = "dungeon-tracker", enabledPath = "Dungeons/Dungeons Tracker/dungeonTracker"),
-            MenuFeature("dungeon-splits", "Dungeon Splits", "Live run splits, personal bests, best possible time and averages per floor", MenuCategory.DUNGEONS, "Runs", listOf("splits", "timer", "pb", "personal best", "theoretical", "average", "300", "terminals", "necron", "relics"), tool = "dungeon-splits", enabledPath = "Dungeons/Dungeon Splits/enabled"),
-            MenuFeature("goldor-coordination", "Goldor Coordination", "F7/M7 terminal map, ADG role routes, stacks and timed pre-leaps, shared in party chat", MenuCategory.DUNGEONS, "Boss", listOf("terminals", "terminal map", "adg", "goldor", "p3", "pre-leap", "ee2", "ee3", "core", "mee2", "hee3", "leap", "stack", "levers", "devices"), enabledPath = "Dungeons/Goldor Coordination/enabled"),
-            MenuFeature("healer-crush-camera", "Crush Camera", "Class-specific fixed views from 26 seconds into Storm until Storm dies", MenuCategory.DUNGEONS, "Boss", listOf("camera", "healer", "crush", "purple", "yellow", "storm", "f7", "m7", "preview"), tool = "healer-crush-camera", enabledPath = "Dungeons/Healer Crush Camera/enabled"),
-            MenuFeature("leap-menu", "Spirit Leap Menu", "Choose a teammate with four local gameplay previews", MenuCategory.DUNGEONS, "Parties", listOf("spirit", "leap", "teleport", "pov", "camera", "teammates"), enabledPath = "Dungeons/Leap Menu/enabled"),
-            MenuFeature("dungeon-chests", "Dungeon Chests", "Estimated chest profit, valuable loot and purchase/reroll protection", MenuCategory.DUNGEONS, "Rewards", listOf("profit", "kismet", "reroll", "bazaar", "prices", "chest")),
-            MenuFeature("dungeon-chat", "Dungeon Chat Filter", "Choose which dungeon messages remain visible", MenuCategory.DUNGEONS, "Information", listOf("chat", "messages", "filter")),
-            MenuFeature("dungeon-summary", "Dungeon Win Screen", "Show a summary overlay after a completed dungeon", MenuCategory.DUNGEONS, "Runs", listOf("overlay", "hud", "win"), enabledPath = "Dungeons/dungeonWinScreen"),
-            MenuFeature("status-bars", "Status Bars", "Separate animated health, mana, defense, speed, vitality, respiration and experience bars you can arrange around the hotbar", MenuCategory.COMBAT, "Player", listOf("health", "mana", "defense", "ehp", "hearts", "bar", "skyblocker", "hud", "absorption", "overflow", "speed", "vitality", "respiration", "air", "experience", "xp", "level", "fancy bars"), tool = "status-bars", enabledPath = "General/Status Bars/enabled"),
-            MenuFeature("ability-cooldowns", "Ability Cooldowns", "Held-item ability timers and ready notifications", MenuCategory.COMBAT, "Timers", listOf("cooldown", "timer", "ability", "hud", "notification"), enabledPath = "General/displayAbilityCooldown"),
-            MenuFeature("loadouts", "Loadout Keybinds", "Swap equipment loadouts with configured keys and menu safeguards", MenuCategory.COMBAT, "Gear", listOf("equipment", "keybind", "keyboard", "armor"), enabledPath = "General/Loadout Keybinds/enabled"),
-            MenuFeature("instance-helpers", "Instance Helpers", "Missing-player alerts and requeue behavior for dungeon and Kuudra parties", MenuCategory.COMBAT, "Instances", listOf("dungeons", "kuudra", "party", "requeue", "downtime")),
-            MenuFeature("bal-notifier", "Bal Notifications", "Share Bal spawn and health milestones with your party", MenuCategory.COMBAT, "Enemies", listOf("bal", "boss", "mob", "mining", "health"), enabledPath = "Mining/balNotify"),
-            MenuFeature("auction-browser", "Auction Browser", "Search cached auction listings, filters, bids and item lore", MenuCategory.ECONOMY, "Auctions", listOf("ah", "auction house", "market", "prices", "bin"), tool = "auction-browser"),
+            MenuFeature("community", "Discord & Community", "Connect Discord, choose community data sharing (On, On (anon) or Off) and updates", MenuCategory.SETTINGS, "Privacy and Account", listOf("discord", "connect", "privacy", "sharing", "updates", "account"), tool = "community"),
+            MenuFeature("leaderboards", "Community Leaderboards", "Compare consenting participants with source labels and UTC periods", MenuCategory.COMMUNITY, "Leaderboards", listOf("rank", "ranking", "economy", "dungeons", "rng", "weekly", "monthly"), tool = "leaderboards"),
+            MenuFeature("rng-journal", "RNG Journal", "Search preserved personal acquisitions, dates, counts and measured history", MenuCategory.COMMUNITY, "RNG Journal and Progress", listOf("rare", "drops", "history", "journal", "rng", "weekly", "monthly"), tool = "rng-journal"),
+            MenuFeature("party-finder", "Party Finder", "Online dungeon friends, LFG availability, invites and party filters", MenuCategory.DUNGEONS, "Parties and Party Tools", listOf("party", "friends", "lfg", "availability", "dungeon-friends", "secondary classes"), tool = "party-finder", enabledPath = "Dungeons/Dungeon Friends/enabled"),
+            MenuFeature("starred-routes", "Dungeon Routing", "Follow doors toward Blood, optionally visiting starred mobs", MenuCategory.DUNGEONS, "Routes and Navigation", listOf("route", "path", "blood", "wither", "healer", "starred", "mobs", "fairy", "straight", "starred clear routing"), enabledPath = "Dungeons/Starred Clear Routing/enabled"),
+            MenuFeature("dungeon-tracker", "Dungeon Tracker", "Run history, loot records and estimated dungeon rewards", MenuCategory.DUNGEONS, "Run Tracking and Splits", listOf("loot", "profit", "bazaar", "history", "rng"), tool = "dungeon-tracker", enabledPath = "Dungeons/Dungeons Tracker/dungeonTracker"),
+            MenuFeature("dungeon-splits", "Dungeon Splits", "Live run splits, personal bests, best possible time and averages per floor", MenuCategory.DUNGEONS, "Run Tracking and Splits", listOf("splits", "timer", "pb", "personal best", "theoretical", "average", "300", "terminals", "necron", "relics"), tool = "dungeon-splits", enabledPath = "Dungeons/Dungeon Splits/enabled"),
+            MenuFeature("goldor-coordination", "Goldor Coordination", "F7/M7 terminal map, ADG role routes, stacks and timed pre-leaps, shared in party chat", MenuCategory.DUNGEONS, "Boss Coordination", listOf("terminals", "terminal map", "adg", "goldor", "p3", "pre-leap", "ee2", "ee3", "core", "mee2", "hee3", "leap", "stack", "levers", "devices"), enabledPath = "Dungeons/Goldor Coordination/enabled"),
+            MenuFeature("healer-crush-camera", "Crush Camera", "Class-specific fixed views from 26 seconds into Storm until Storm dies", MenuCategory.DUNGEONS, "Boss Coordination", listOf("camera", "healer", "crush", "purple", "yellow", "storm", "f7", "m7", "preview"), tool = "healer-crush-camera", enabledPath = "Dungeons/Healer Crush Camera/enabled"),
+            MenuFeature("leap-menu", "Spirit Leap Menu", "Choose a teammate with four local gameplay previews", MenuCategory.DUNGEONS, "Parties and Party Tools", listOf("spirit", "leap", "teleport", "pov", "camera", "teammates"), enabledPath = "Dungeons/Leap Menu/enabled"),
+            MenuFeature("dungeon-chests", "Dungeon Chests", "Estimated chest profit, valuable loot and purchase/reroll protection", MenuCategory.DUNGEONS, "Rewards and Dungeon Information", listOf("profit", "kismet", "reroll", "bazaar", "prices", "chest")),
+            MenuFeature("dungeon-chat", "Dungeon Chat Filter", "Choose which dungeon messages remain visible", MenuCategory.DUNGEONS, "Rewards and Dungeon Information", listOf("chat", "messages", "filter")),
+            MenuFeature("dungeon-summary", "Dungeon Win Screen", "Show a summary overlay after a completed dungeon", MenuCategory.DUNGEONS, "Run Tracking and Splits", listOf("overlay", "hud", "win"), enabledPath = "Dungeons/dungeonWinScreen"),
+            MenuFeature("status-bars", "Status Bars", "Separate animated health, mana, defense, speed, vitality, respiration and experience bars you can arrange around the hotbar", MenuCategory.APPEARANCE, "HUD and Widgets", listOf("health", "mana", "defense", "ehp", "hearts", "bar", "skyblocker", "hud", "absorption", "overflow", "speed", "vitality", "respiration", "air", "experience", "xp", "level", "fancy bars"), tool = "status-bars", enabledPath = "General/Status Bars/enabled"),
+            MenuFeature("ability-cooldowns", "Ability Cooldowns", "Held-item ability timers and ready notifications", MenuCategory.GAMEPLAY, "Combat and Abilities", listOf("cooldown", "timer", "ability", "hud", "notification"), enabledPath = "General/displayAbilityCooldown"),
+            MenuFeature("loadouts", "Loadout Keybinds", "Swap equipment loadouts with configured keys and menu safeguards", MenuCategory.GAMEPLAY, "Combat and Abilities", listOf("equipment", "keybind", "keyboard", "armor"), enabledPath = "General/Loadout Keybinds/enabled"),
+            MenuFeature("instance-helpers", "Instance Helpers", "Missing-player alerts and requeue behavior for dungeon and Kuudra parties", MenuCategory.GAMEPLAY, "Instances and Requeue", listOf("dungeons", "kuudra", "party", "requeue", "downtime")),
+            MenuFeature("bal-notifier", "Bal Notifications", "Share Bal spawn and health milestones with your party", MenuCategory.GAMEPLAY, "Combat and Abilities", listOf("bal", "boss", "mob", "mining", "health"), enabledPath = "Mining/balNotify"),
+            MenuFeature("auction-browser", "Auction Browser", "Search cached auction listings, filters, bids and item lore", MenuCategory.ECONOMY, "Auctions and Bazaar", listOf("ah", "auction house", "market", "prices", "bin"), tool = "auction-browser"),
             MenuFeature("price-history", "Price History", "Hover an item in a menu and press P for its Bazaar or auction price graph", MenuCategory.ECONOMY, "Item Values", listOf("price", "graph", "chart", "history", "neu", "bazaar", "auction", "bin", "coflnet"), enabledPath = "General/Price History/enabled"),
-            MenuFeature("greenhouse-planner", "Greenhouse Planner", "Your greenhouses, profit-ranked mutations per plot, layouts, growth timers, harvest profit and ghost blocks. /sm greenhouse help", MenuCategory.ECONOMY, "Garden", listOf("garden", "greenhouse", "mutation", "crops", "farming", "skymutations", "layout", "ghost", "harvest", "profit history"), tool = "greenhouse-planner", enabledPath = "General/Greenhouse Planner/enabled"),
-            MenuFeature("stash-helper", "Stash Value Filter", "Filter low-value stash items and prevent unwanted pickups", MenuCategory.ECONOMY, "Item Values", listOf("stash", "price", "coins", "value", "filter"), enabledPath = "General/Stash Helper/stashHelper"),
-            MenuFeature("cosmetics", "Player Cosmetics", "Choose cosmetics and control rendered names and player scaling", MenuCategory.COSMETICS, "Player Appearance", listOf("appearance", "names", "scale", "scaling", "preview"), tool = "cosmetics"),
-            MenuFeature("daily-digest", "Daily Digest", "Daily progress, public updates and optional community RNG reports", MenuCategory.UTILS, "Progress", listOf("news", "rng", "daily", "history", "rewards"), tool = "daily-digest"),
-            MenuFeature("global-chat", "IRC Chat", "Global Minecraft/Discord chat and Minecraft-only Party IRC. /sm irc or /sm party", MenuCategory.UTILS, "Social", listOf("irc", "discord", "messages", "social", "global", "party", "media", "gif", "replies", "reactions", "ping", "global skymyce chat", "chat sky"), tool = "global-chat", enabledPath = "General/Global SkyMyce Chat/enabled"),
-            MenuFeature("party-commands", "Party Commands", "Choose party commands, cooldowns and the optional stats API fallback", MenuCategory.UTILS, "Social", listOf("party", "pb", "downtime", "commands", "api")),
-            MenuFeature("player-utilities", "Player Utilities", "Cached friend activity, locations and profile information", MenuCategory.UTILS, "Social", listOf("friends", "player", "profiles", "online", "social"), tool = "player-utilities"),
-            MenuFeature("mining", "Crystal Hollows Helpers", "Lobby information and configurable nucleus warp timing", MenuCategory.UTILS, "Mining", listOf("mining", "fortune", "crystal", "nucleus", "powder", "lobby", "hud")),
-            MenuFeature("auto-refill", "Auto Refill", "Choose which consumable items are refilled when empty", MenuCategory.UTILS, "Inventory", listOf("refill", "items", "consumables", "inventory")),
-            MenuFeature("npc-dialogue", "NPC Dialogue", "Show NPC lines in a dialogue box with the speaker's portrait, and pick options with number keys", MenuCategory.UTILS, "Information", listOf("npc", "dialogue", "chat", "skycubed", "quest", "options", "talk"), enabledPath = "General/NPC Dialogue/enabled"),
-            MenuFeature("sign-confirm", "Sign Enter", "Press Enter to finish Auction House, Bazaar and other signs", MenuCategory.UTILS, "Inventory", listOf("sign", "enter", "confirm", "ah", "bazaar", "price", "bid", "amount", "done")),
-            MenuFeature("information", "Information Overlays", "Display client details and skill XP progress", MenuCategory.UTILS, "Information", listOf("xp", "skill", "client", "hud", "overlay")),
-            MenuFeature("settings-appearance", "Appearance", "Theme preset and graphics mode; the mode also sets GUI animations", MenuCategory.SETTINGS, "Appearance", listOf("theme", "colors", "preset", "animation", "animations", "motion", "accessibility", "reduced motion", "fps", "graphics", "quality", "rendering", "performance")),
-            MenuFeature("settings-hud", "HUD", "Arrange widgets, visibility and scale", MenuCategory.SETTINGS, "HUD", listOf("hud", "overlay", "layout", "widget", "scale", "visibility"), tool = "hud-editor"),
-            MenuFeature("settings-controls", "Controls", "Choose the key that opens the Sky-Myce menu", MenuCategory.SETTINGS, "Controls", listOf("keybind", "keyboard", "input", "controls")),
+            MenuFeature("greenhouse-planner", "Greenhouse Planner", "Your greenhouses, profit-ranked mutations per plot, layouts, growth timers, harvest profit and ghost blocks. /sm greenhouse help", MenuCategory.ECONOMY, "Garden and Greenhouse", listOf("garden", "greenhouse", "mutation", "crops", "farming", "skymutations", "layout", "ghost", "harvest", "profit history"), tool = "greenhouse-planner", enabledPath = "General/Greenhouse Planner/enabled"),
+            MenuFeature("stash-helper", "Stash Value Filter", "Filter low-value stash items and prevent unwanted pickups", MenuCategory.ECONOMY, "Stash and Inventory Value", listOf("stash", "price", "coins", "value", "filter"), enabledPath = "General/Stash Helper/stashHelper"),
+            MenuFeature("cosmetics", "Player Cosmetics", "Choose cosmetics and control rendered names and player scaling", MenuCategory.APPEARANCE, "Player Cosmetics", listOf("appearance", "names", "scale", "scaling", "preview"), tool = "cosmetics"),
+            MenuFeature("daily-digest", "Daily Digest", "Daily progress, public updates and optional community RNG reports", MenuCategory.COMMUNITY, "Daily Digest and Updates", listOf("news", "rng", "daily", "history", "rewards"), tool = "daily-digest"),
+            MenuFeature("global-chat", "IRC Chat", "Global Minecraft/Discord chat and Minecraft-only Party IRC. /sm irc or /sm party", MenuCategory.COMMUNITY, "IRC and Chat", listOf("irc", "discord", "messages", "social", "global", "party", "media", "gif", "replies", "reactions", "ping", "global skymyce chat", "chat sky"), tool = "global-chat", enabledPath = "General/Global SkyMyce Chat/enabled"),
+            MenuFeature("party-commands", "Party Commands", "Choose party commands, cooldowns and the optional stats API fallback", MenuCategory.COMMUNITY, "IRC and Chat", listOf("party", "pb", "downtime", "commands", "api")),
+            MenuFeature("player-utilities", "Player Utilities", "Cached friend activity, locations and profile information", MenuCategory.COMMUNITY, "Friends and Players", listOf("friends", "player", "profiles", "online", "social"), tool = "player-utilities"),
+            MenuFeature("mining", "Crystal Hollows Helpers", "Lobby information and configurable nucleus warp timing", MenuCategory.GAMEPLAY, "Mining", listOf("mining", "fortune", "crystal", "nucleus", "powder", "lobby", "hud")),
+            MenuFeature("auto-refill", "Auto Refill", "Choose which consumable items are refilled when empty", MenuCategory.GAMEPLAY, "Inventory and Interactions", listOf("refill", "items", "consumables", "inventory")),
+            MenuFeature("npc-dialogue", "NPC Dialogue", "Show NPC lines in a dialogue box with the speaker's portrait, and pick options with number keys", MenuCategory.GAMEPLAY, "Inventory and Interactions", listOf("npc", "dialogue", "chat", "skycubed", "quest", "options", "talk"), enabledPath = "General/NPC Dialogue/enabled"),
+            MenuFeature("sign-confirm", "Sign Enter", "Press Enter to finish Auction House, Bazaar and other signs", MenuCategory.GAMEPLAY, "Inventory and Interactions", listOf("sign", "enter", "confirm", "ah", "bazaar", "price", "bid", "amount", "done")),
+            MenuFeature("information", "Information Overlays", "Display client details and skill XP progress", MenuCategory.GAMEPLAY, "Information", listOf("xp", "skill", "client", "hud", "overlay")),
+            MenuFeature("settings-appearance", "Appearance", "Theme preset: palette and component style for every menu and HUD widget", MenuCategory.APPEARANCE, "Themes and Colors", listOf("theme", "colors", "preset", "palette", "style")),
+            MenuFeature("settings-graphics", "Performance & Graphics", "Graphics mode: shadows, glow, background blur and GUI animations. Auto adapts to hold 60 FPS; text stays sharp in every mode", MenuCategory.SETTINGS, "Performance and Graphics", listOf("animation", "animations", "motion", "accessibility", "reduced motion", "fps", "graphics", "quality", "rendering", "performance", "blur", "lag")),
+            MenuFeature("settings-hud", "HUD", "Arrange widgets, visibility and scale", MenuCategory.APPEARANCE, "HUD and Widgets", listOf("hud", "overlay", "layout", "widget", "scale", "visibility"), tool = "hud-editor"),
+            MenuFeature("settings-controls", "Controls", "Choose the key that opens the Sky-Myce menu", MenuCategory.SETTINGS, "Controls and Keybinds", listOf("keybind", "keyboard", "input", "controls")),
         )
 
         val routingSettingGroups = linkedMapOf(
@@ -521,16 +522,11 @@ class MenuCatalog(rows: List<SettingRow>) {
                 path == "General/autoRefill" -> "auto-refill"
                 path == "General/displayAbilityCooldown" || path == "General/displayAbilityNotification" -> "ability-cooldowns"
                 path == "General/clientInfo" || path == "General/displayXp" || path == "General/displayXpBar" -> "information"
-                else -> null
+                path == "Theme & Appearance/graphicsQuality" -> "settings-graphics"
+                path.startsWith("Theme & Appearance/") -> "settings-appearance"
+                else -> "settings-controls"
             }
-            if (feature != null) return definitions.first { it.id == feature }.let {
-                MenuSettingLocation(it.category, it.subcategory, it.id)
-            }
-            val section = when {
-                path.startsWith("Theme & Appearance/") -> "Appearance"
-                else -> "Controls"
-            }
-            return MenuSettingLocation(MenuCategory.SETTINGS, section)
+            return definitions.first { it.id == feature }.let { MenuSettingLocation(it.category, it.subcategory, it.id) }
         }
     }
 }

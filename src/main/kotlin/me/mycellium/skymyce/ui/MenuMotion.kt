@@ -58,18 +58,17 @@ data class MotionProfile(
 
 enum class GuiQuality(
     private val title: String,
-    val rasterScale: Double,
     val shadowLayers: Int,
     val glow: Boolean,
     val ambient: Boolean,
     val ambientIntervalNanos: Long,
 ) {
     /** Adapts between the tiers below from measured frame times (see [AutoGraphics]); renderers read [AutoGraphics.quality]. */
-    AUTO("Auto (recommended)", 1.5, 2, true, true, 100_000_000),
-    EXTREMELY_LIGHT("Extremely Light", 1.0, 0, false, false, 0),
-    LIGHT("Light", 1.25, 1, false, false, 0),
-    MEDIUM("Medium", 1.5, 2, true, true, 100_000_000),
-    HIGH("High", 2.0, 3, true, true, 50_000_000);
+    AUTO("Auto (recommended)", 2, true, true, 100_000_000),
+    EXTREMELY_LIGHT("Extremely Light", 0, false, false, 0),
+    LIGHT("Light", 1, false, false, 0),
+    MEDIUM("Medium", 2, true, true, 100_000_000),
+    HIGH("High", 3, true, true, 50_000_000);
 
     override fun toString() = title
 }

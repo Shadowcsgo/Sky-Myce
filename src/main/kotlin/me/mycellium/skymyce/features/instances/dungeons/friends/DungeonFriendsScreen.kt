@@ -421,7 +421,7 @@ class DungeonFriendsScreen : MenuScreen(Component.literal("Party Finder"), MenuP
 }
 
 class FriendsSocialScreen : MenuScreen(Component.literal("Friends"), MenuPage.FRIENDS) {
-    override val menuCategory get() = MenuCategory.UTILS
+    override val menuCategory get() = MenuCategory.COMMUNITY
     internal override val canonicalFeatureId get() = "player-utilities"
     private var search = ""
     private var previous: List<Any?> = emptyList()

@@ -592,6 +592,15 @@ internal fun menuTexturePixels(image: BufferedImage, target: IntArray, region: R
     }
 }
 
+/**
+ * Physical pixels per logical canvas pixel, so the texture maps 1:1 onto the window and text stays crisp.
+ * Graphics quality never lowers this: measured GPU savings were ~0.03 ms, while text visibly blurred.
+ */
+fun menuRasterScale(logicalWidth: Int, logicalHeight: Int): Double {
+    val window = net.minecraft.client.Minecraft.getInstance().window
+    return minOf(window.width.toDouble() / logicalWidth.coerceAtLeast(1), window.height.toDouble() / logicalHeight.coerceAtLeast(1)).coerceAtLeast(1.0)
+}
+
 /** Minecraft only composites the finished custom canvas; it paints no menu widgets or text. */
 class MenuTexture : AutoCloseable {
     private var skija: SkijaMenuTexture? = null
