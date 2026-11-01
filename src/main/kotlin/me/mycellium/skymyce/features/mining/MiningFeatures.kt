@@ -199,6 +199,7 @@ object MiningFeatures : SkyMyceModule() {
         val mining = (MC.instance.hitResult as? BlockHitResult)?.takeIf { it.type == HitResult.Type.BLOCK }?.blockPos ?: return
         val type = MiningBlock.currentlyActiveBlocks.firstOrNull { level.getBlockState(mining).block in it.blocks } ?: return
         fun sameType(pos: BlockPos) = level.getBlockState(pos).block in type.blocks
+        fun open(pos: BlockPos) = gone(level.getBlockState(pos).block)
         val eye = player.eyePosition
         val reach = player.blockInteractionRange()
         val r = ceil(reach).toInt()
@@ -206,12 +207,14 @@ object MiningFeatures : SkyMyceModule() {
         // Only blocks with an open face (counting the one being broken) can be aimed at straight away.
         val candidates = BlockPos.betweenClosed(origin.offset(-r, -r, -r), origin.offset(r, r, r)).mapNotNull { pos ->
             pos.immutable().takeIf { it != mining && sameType(it) && Vec3.atCenterOf(it).distanceTo(eye) <= reach &&
-                Direction.entries.any { d -> it.relative(d).let { n -> n == mining || level.getBlockState(n).isAir } } }
+                Direction.entries.any { d -> it.relative(d).let { n -> n == mining || open(n) } } }
         }
         val spread = spreadFor(type.family == MiningBlockFamily.GEMSTONES, miningSpread, gemstoneSpread, MiningConfig.spreadFallback, MiningConfig.gemstoneSpreadFallback)
         val look = player.lookAngle
-        nextBlock = bestSpreadFollowUp(mining, candidates, ::sameType, spread.toDouble()) { 1 - look.dot(Vec3.atCenterOf(it).subtract(eye).normalize()) }
-            ?.let { it to type }
+        // Spread takes any block of the mined block's family (Titanium took Mithril and back), never stone.
+        nextBlock = bestSpreadFollowUp(mining, candidates, { level.getBlockState(it).block in type.family.blocks }, ::open, spread.toDouble()) {
+            1 - look.dot(Vec3.atCenterOf(it).subtract(eye).normalize())
+        }?.let { it to type }
     }
 
     private fun findBlast(): Pair<BlockPos, List<BlockPos>>? {
@@ -293,18 +296,32 @@ internal fun parseStat(lines: List<String>, stat: String) =
 /** The ore of a collector commission, e.g. "Umber Collector" -> UMBER and "Onyx Gemstone Collector" -> ONYX, matching [MiningBlock] name suffixes. */
 internal fun collectorOre(name: String) = name.takeIf { it.endsWith("Collector") }?.substringBefore(' ')?.uppercase()
 
-/** Mining Spread breaks [spread]/100 extra blocks on average, shared among the broken block's same-type face neighbours. */
-// shortcut: assumes spread takes same-type face neighbours evenly; revisit if Hypixel's pick rule turns out different.
-internal fun spreadTakeChance(spread: Double, sameTypeNeighbours: Int) =
-    if (sameTypeNeighbours <= 0) 0.0 else (spread / 100.0 / sameTypeNeighbours).coerceIn(0.0, 1.0)
+/**
+ * Chance Mining Spread takes one exposed block among the [pool] spreadable blocks around a broken one.
+ * Fitted to 258 recorded Mithril/Titanium breaks at 288 spread: ~22% each with nine candidates. The +10 stands in for the
+ * fifth of picks that land up to two blocks beyond the 26-neighbourhood.
+ */
+// shortcut: fitted at one spread value and on Mithril only; refit with samples at other spreads, gemstones and Glacite Tunnels ores.
+internal fun spreadTakeChance(spread: Double, pool: Double) = if (pool <= 0) 0.0 else (spread / 100 * 1.45 / (pool + 10)).coerceIn(0.0, 1.0)
 
-/** The candidate worth mining once [mining] breaks: likely to survive its spread, then the most expected spread of its own, then cheapest to aim at. */
-internal fun bestSpreadFollowUp(mining: BlockPos, candidates: Collection<BlockPos>, sameType: (BlockPos) -> Boolean, spread: Double, aimCost: (BlockPos) -> Double): BlockPos? {
-    fun neighbours(pos: BlockPos) = Direction.entries.map(pos::relative).filter { it != mining && sameType(it) }
-    val take = spreadTakeChance(spread, neighbours(mining).size)
-    fun survives(pos: BlockPos) = if (pos.distManhattan(mining) == 1) 1 - take else 1.0
-    fun score(pos: BlockPos) = survives(pos) * (1 + minOf(spread / 100.0, neighbours(pos).sumOf(::survives)))
-    return candidates.filter { it != mining }.maxWithOrNull(compareBy<BlockPos>(::score).thenByDescending(aimCost))
+private val NEIGHBOURS_26 = (-1..1).flatMap { x -> (-1..1).flatMap { y -> (-1..1).map { z -> Triple(x, y, z) } } }.filter { it != Triple(0, 0, 0) }
+
+/** Blocks spread can take once [centre] and [gone] are broken: same family ([spreadKind]) with an open face. Spread never took a buried block (0 of 997). */
+internal fun spreadPool(centre: BlockPos, gone: Set<BlockPos>, spreadKind: (BlockPos) -> Boolean, open: (BlockPos) -> Boolean) =
+    NEIGHBOURS_26.map { (x, y, z) -> centre.offset(x, y, z) }
+        .filter { it !in gone && spreadKind(it) && Direction.entries.any { d -> it.relative(d).let { n -> n in gone || open(n) } } }
+
+/** The candidate worth mining once [mining] breaks: likely to survive its spread, with the most spread of its own; near-ties go to the easiest aim. */
+internal fun bestSpreadFollowUp(mining: BlockPos, candidates: Collection<BlockPos>, spreadKind: (BlockPos) -> Boolean, open: (BlockPos) -> Boolean,
+                                spread: Double, aimCost: (BlockPos) -> Double): BlockPos? {
+    val first = spreadPool(mining, setOf(mining), spreadKind, open).toSet()
+    val take = spreadTakeChance(spread, first.size.toDouble())
+    fun survives(pos: BlockPos) = if (pos in first) 1 - take else 1.0
+    fun value(pos: BlockPos) = spreadPool(pos, setOf(mining, pos), spreadKind, open).sumOf(::survives).let { n -> minOf(spread / 100, n * spreadTakeChance(spread, n)) }
+    val scored = candidates.filter { it != mining }.associateWith { survives(it) * (1 + value(it)) }
+    val best = scored.values.maxOrNull() ?: return null
+    // Within 5% of the best, re-aiming costs more than the difference, so the easiest block to aim at wins.
+    return scored.filterValues { it >= best * 0.95 }.keys.minBy(aimCost)
 }
 
 /** Blast centres ranked by how many [targets] lie within [radius] blocks of them. */

@@ -7,12 +7,24 @@ fun main() {
     val origin = BlockPos(0, 0, 0)
     val ores = setOf(BlockPos(1, 0, 0), BlockPos(2, 0, 0), BlockPos(3, 0, 0), BlockPos(0, 0, 1))
     val nearest = { pos: BlockPos -> pos.distSqr(origin) }
-    // 100 spread shares one block between the two neighbours, so the next vein block beyond them is safest and still spreads.
-    check(bestSpreadFollowUp(origin, ores, ores::contains, 100.0, nearest) == BlockPos(2, 0, 0))
+    val air = { pos: BlockPos -> pos !in ores }
+    // The two blocks around the mined one risk the spread, so the next vein block beyond them is safest and still spreads.
+    check(bestSpreadFollowUp(origin, ores, ores::contains, air, 288.0, nearest) == BlockPos(2, 0, 0))
     // Without spread nothing is taken, so the easiest block to aim at wins.
-    check(bestSpreadFollowUp(origin, ores, ores::contains, 0.0, nearest) == BlockPos(1, 0, 0))
-    check(bestSpreadFollowUp(origin, emptyList(), ores::contains, 100.0, nearest) == null)
-    check(spreadTakeChance(300.0, 2) == 1.0 && spreadTakeChance(100.0, 0) == 0.0 && spreadTakeChance(100.0, 4) == 0.25)
+    check(bestSpreadFollowUp(origin, ores, ores::contains, air, 0.0, nearest) == BlockPos(1, 0, 0))
+    check(bestSpreadFollowUp(origin, emptyList(), ores::contains, air, 288.0, nearest) == null)
+    // Fitted rate: ~22% each among nine candidates at 288 spread.
+    check(kotlin.math.abs(spreadTakeChance(288.0, 9.0) - 0.2198) < 0.001)
+    check(spreadTakeChance(1000.0, 1.0) == 1.0 && spreadTakeChance(288.0, 0.0) == 0.0 && spreadTakeChance(0.0, 5.0) == 0.0)
+
+    // Spread takes exposed same-family blocks from all 26 around (edges too), never buried ones or other kinds such as stone.
+    val vein = setOf(BlockPos(1, 0, 0), BlockPos(1, 1, 0), BlockPos(0, 1, 1))
+    val stone = BlockPos.betweenClosed(-2, -2, -2, 2, 2, 2).map { it.immutable() }.filter { it != origin && it !in vein }.toSet()
+    val solid = { pos: BlockPos -> pos in vein || pos in stone }
+    // (1,0,0) touches the mined block; (1,1,0) and (0,1,1) are edge neighbours sealed in by stone.
+    check(spreadPool(origin, setOf(origin), vein::contains) { !solid(it) } == listOf(BlockPos(1, 0, 0)))
+    val openEdge = spreadPool(origin, setOf(origin), vein::contains) { !solid(it) || it == BlockPos(0, 2, 1) }
+    check(openEdge.toSet() == setOf(BlockPos(1, 0, 0), BlockPos(0, 1, 1)))
 
     val cluster = listOf(BlockPos(0, 0, 0), BlockPos(1, 0, 0), BlockPos(0, 1, 0), BlockPos(10, 0, 0))
     val ranked = rankBlastCentres(cluster, 2)
