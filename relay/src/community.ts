@@ -21,7 +21,9 @@ export type CommunityResult = { ok: boolean; error?: string; identity?: Communit
   invalidatedAccounts?: string[]; invalidatedMinecraft?: string[]; challengeId?: string; nonce?: string; expiresAt?: number;
   flowId?: string; browserUrl?: string | null; fallbackCode?: string; pollIntervalMs?: number; minecraftName?: string; state?: string;
   status?: string; token?: string; action?: string; target?: string; options?: CommunityOptions; identities?: CommunityIdentity[];
-  entries?: PublicRow[]; sessions?: PublicRow[]; events?: (PublicRow & { metadata: string })[]; overview?: Record<string, number>; devices?: DeviceReport[]; retryAt?: number };
+  entries?: PublicRow[]; sessions?: PublicRow[]; events?: (PublicRow & { metadata: string })[]; overview?: Record<string, number>; devices?: DeviceReport[]; retryAt?: number; users?: ModUser[] };
+/** A Discord account that has used the mod: newest community activity first. */
+export type ModUser = { discordId: string; username: string | null; displayName: string | null; lastSeen: number | null; modVersion: string | null; minecraft: string | null };
 type Account = { account_id: string; discord_id: string; generation: number; status: string; is_admin: number };
 type Flow = { flow_id: string; launch_hash: string; poll_hash: string; code_hash: string; uuid: string; name: string; device_json: string | null;
   mod_version: string; expires_at: number; account_id: string | null; session_id: string | null; cancelled_at: number | null;
@@ -379,6 +381,16 @@ export class CommunityAccounts {
         const query = String(options.query ?? "").trim().toLowerCase(); if (!query || query.length > 100) deny("invalid_request");
         const accounts = this.sql.exec<{ account_id: string }>(`SELECT DISTINCT a.account_id FROM sky_accounts a LEFT JOIN account_discord_names d ON d.discord_id=a.discord_id LEFT JOIN minecraft_accounts m ON m.account_id=a.account_id WHERE instr(lower(COALESCE(d.username,'')||COALESCE(d.display_name,'')||a.discord_id||COALESCE(m.name,'')),?)>0 LIMIT 25`, query).toArray();
         return { ok: true, identities: accounts.map(a => this.identity(a.account_id)) };
+      }
+      if (action === "users") {
+        const since = Date.now() - 7 * 86400000;
+        return { ok: true, users: this.sql.exec<ModUser>(`SELECT a.discord_id AS discordId,n.username,n.display_name AS displayName,MAX(s.last_seen) AS lastSeen,
+            (SELECT mod_version FROM community_sessions WHERE account_id=a.account_id ORDER BY last_seen DESC LIMIT 1) AS modVersion,
+            (SELECT group_concat(name,', ') FROM minecraft_accounts WHERE account_id=a.account_id) AS minecraft
+          FROM sky_accounts a JOIN community_sessions s ON s.account_id=a.account_id LEFT JOIN account_discord_names n ON n.discord_id=a.discord_id
+          GROUP BY a.account_id ORDER BY lastSeen DESC LIMIT ? OFFSET ?`, limit, offset).toArray(),
+          overview: { users: this.sql.exec<{ n: number }>("SELECT COUNT(DISTINCT account_id) n FROM community_sessions").one().n,
+            active_7_days: this.sql.exec<{ n: number }>("SELECT COUNT(DISTINCT account_id) n FROM community_sessions WHERE last_seen>=?", since).one().n } };
       }
       if (action === "overview") return { ok: true, overview: { accounts: this.sql.exec<{ n: number }>("SELECT COUNT(*) n FROM sky_accounts").one().n,
         sessions: this.sql.exec<{ n: number }>("SELECT COUNT(*) n FROM community_sessions WHERE revoked_at IS NULL AND access_expires_at>?", Date.now()).one().n,

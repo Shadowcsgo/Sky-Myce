@@ -34,9 +34,14 @@ object MiningConfig : CategoryKt("Mining") {
         range = 0.0..1.0
     }
 
+    val commissionHighlight by boolean(false) {
+        name = TranslatableValue.literal("Commission Highlight")
+        description = TranslatableValue.literal("Highlights what your open commissions need: the ore or gemstone blocks around you, and the mobs for slayer commissions, including Glacite mobs in Mineshafts")
+    }
+
     val spreadPredictor by boolean(false) {
         name = TranslatableValue.literal("Mining Spread Predictor")
-        description = TranslatableValue.literal("While mining an ore, outlines the block to mine next: one your Mining Spread probably won't take, with the most same-type neighbours for the next spread")
+        description = TranslatableValue.literal("After you break an ore or gemstone with a pickaxe or drill, flashes the blocks your Mining Spread took and outlines the best block to mine next. Taps that don't break a block, stone and Hard Stone are ignored; off in the Catacombs")
     }
 
     val spreadFallback by int(100) {
@@ -63,7 +68,7 @@ object MiningConfig : CategoryKt("Mining") {
 
     val pickobulusHelper by boolean(false) {
         name = TranslatableValue.literal("Pickobulus Commission Spot")
-        description = TranslatableValue.literal("In the Glacite Tunnels, marks the visible block where a Pickobulus blast breaks the most blocks for your open collector commissions")
+        description = TranslatableValue.literal("Scans the veins around you for your open block commissions and marks where a Pickobulus blast breaks the most; when that spot is hidden or far, an arrow leads you to it")
     }
 
     val pickobulusRadius by int(3) {

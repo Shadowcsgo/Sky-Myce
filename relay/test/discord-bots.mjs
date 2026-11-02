@@ -155,6 +155,23 @@ test('private association reports identify multiple computers/shared accounts wi
   assert.ok(!overview.text.includes(device));
 });
 
+test('admins can list Discord accounts that use the mod, newest first, paged by option', async () => {
+  const result = { ok: true, users: [
+    { discordId: '77777777777777777', username: 'miner', displayName: 'Mithril Miner', lastSeen: 1800001000000, modVersion: '2.8.0-beta-046', minecraft: 'ExamplePlayer, Alt' },
+    { discordId: '88888888888888888', username: null, displayName: null, lastSeen: null, modVersion: null, minecraft: null },
+  ], overview: { users: 42, active_7_days: 9 } };
+  const report = await responseFor(command('skyhawk', 'users', [{ name: 'page', type: 4, value: 2 }]), result, 'backend');
+  assert.match(report.text, /Mithril Miner.*@miner.*77777777777777777.*ExamplePlayer, Alt.*2\.8\.0-beta-046/s);
+  assert.match(report.text, /88888888888888888.*version not reported/s);
+  assert.match(report.text, /42 Discord accounts have used the mod; 9 in the last 7 days/);
+  assert.match(report.text, /Page 2/);
+  assert.deepEqual(report.operations.find(operation => operation[0] === 'read'), ['read', actor.id, 'users', '', { page: 2, limit: 8 }]);
+  assert.ok(!report.operations.some(operation => ['prepare', 'confirm', 'user'].includes(operation[0])));
+  assert.equal(accountCommand(command('skyhawk', 'users', [{ name: 'query', type: 3, value: 'x' }]), 'backend'), null);
+  assert.equal(accountCommand(command('skyhawk', 'users'), 'backend').target, '');
+  assert.equal(accountCommand(command('skyhawk', 'users'), 'user'), null, 'The user bot never exposes the users report');
+});
+
 test('blacklist changes require opaque private review and invalidate only the returned affected account sessions', async () => {
   const data = command('blacklist', 'add', [targetOption, { name: 'reason', type: 3, value: 'Reviewed online abuse' }]);
   const response = await responseFor(data, { ok: true, invalidatedAccounts: ['affected-account'] }, 'backend', { review: ({ initial, operations }) => {

@@ -32,9 +32,7 @@ import net.minecraft.world.phys.AABB
 import net.minecraft.world.phys.BlockHitResult
 import net.minecraft.world.phys.HitResult
 import net.minecraft.world.phys.Vec3
-import tech.thatgravyboat.skyblockapi.api.area.mining.CommissionArea
 import tech.thatgravyboat.skyblockapi.api.area.mining.CommissionsAPI
-import tech.thatgravyboat.skyblockapi.api.area.mining.GlaciteAPI
 import tech.thatgravyboat.skyblockapi.api.area.mining.MiningBlock
 import tech.thatgravyboat.skyblockapi.api.area.mining.MiningBlockFamily
 import tech.thatgravyboat.skyblockapi.api.events.base.Subscription
@@ -49,6 +47,15 @@ import tech.thatgravyboat.skyblockapi.api.location.LocationAPI
 import tech.thatgravyboat.skyblockapi.api.location.SkyBlockIsland
 import tech.thatgravyboat.skyblockapi.api.profile.party.PartyAPI
 import tech.thatgravyboat.skyblockapi.utils.Scheduling.schedule
+import tech.thatgravyboat.skyblockapi.api.data.SkyBlockCategory
+import tech.thatgravyboat.skyblockapi.api.datatype.DataTypes
+import tech.thatgravyboat.skyblockapi.api.datatype.getData
+import me.mycellium.skymyce.config.misc.ThemeConfig
+import me.mycellium.skymyce.ui.GuiMotion
+import net.minecraft.world.entity.Entity
+import net.minecraft.world.entity.LivingEntity
+import net.minecraft.world.entity.decoration.ArmorStand
+import net.minecraft.world.entity.player.Player
 import kotlin.math.ceil
 import kotlin.math.atan
 import kotlin.math.cos
@@ -101,12 +108,25 @@ object MiningFeatures : SkyMyceModule() {
 
     private const val SPREAD_COLOR = 0x55FFFF
     private const val BLAST_COLOR = 0xFFAA00
-    private const val BLAST_SCAN = 12
+    private const val COMMISSION_COLOR = 0xFFD54F
+    private const val MOB_COLOR = 0xFF5555
+    /** Horizontal and vertical reach of the once-a-second commission block scan (~35k blocks). */
+    private const val SCAN_XZ = 20
+    private const val SCAN_Y = 10
+    private const val HIGHLIGHTED_BLOCKS = 250
+    /** Pickobulus is marked in place only this close; farther or hidden veins get an arrow. */
+    private const val BLAST_REACH = 15.0
 
     private var miningSpread: Int? = null
     private var gemstoneSpread: Int? = null
     private var nextBlock: Pair<BlockPos, MiningBlock>? = null
-    private var blast: Pair<BlockPos, List<BlockPos>>? = null
+    private var nextShownAt = 0L
+    /** Blocks the last break's spread took, with when; drawn as a short fading burst. */
+    private var spreadBurst: Pair<List<BlockPos>, Long>? = null
+    private class Blast(val centre: BlockPos, val hits: List<BlockPos>, val reachable: Boolean)
+    private var blast: Blast? = null
+    private var commissionBlocks: List<BlockPos> = emptyList()
+    private var commissionMobs: List<Entity> = emptyList()
     private var ticks = 0
 
     @Subscription
@@ -119,9 +139,12 @@ object MiningFeatures : SkyMyceModule() {
     @Subscription
     fun onTick(event: TickEvent) {
         ticks++
-        if (MiningConfig.spreadPredictor) predictSpread() else nextBlock = null
-        // The blast scan covers ~15k blocks, so it refreshes once a second rather than every tick.
+        if (MiningConfig.spreadPredictor) predictSpread() else { nextBlock = null; mining = null; spreadBurst = null }
+        // The commission scan covers ~35k blocks, so it refreshes once a second; Pickobulus ranks the same blocks.
+        val blocksWanted = MiningConfig.commissionHighlight || MiningConfig.pickobulusHelper
+        if (!blocksWanted) commissionBlocks = emptyList() else if (ticks % 20 == 0) commissionBlocks = scanCommissionBlocks()
         if (!MiningConfig.pickobulusHelper) blast = null else if (ticks % 20 == 0) blast = findBlast()
+        if (!MiningConfig.commissionHighlight) commissionMobs = emptyList() else if (ticks % 5 == 0) commissionMobs = findCommissionMobs()
         if (Config.devMode && MiningConfig.recordSpread) recordSpread() else { snapshot = null; pending = null }
     }
 
@@ -194,26 +217,44 @@ object MiningFeatures : SkyMyceModule() {
         Utils.displayDevMessage("Spread sample ${samples.size()}: ${shot.name} took ${broken.size} more")
     }
 
-    private var lastMined: Pair<BlockPos, MiningBlock>? = null
+    /** The block being broken, the tick it was last held, and its spreadable neighbours as they were. */
+    private class Breaking(val pos: BlockPos, val type: MiningBlock, var tick: Int, var around: List<BlockPos>)
+    private var mining: Breaking? = null
+
+    /** Spread only works with a pickaxe or drill, never in the Catacombs (dungeon pickaxes are their own category). */
+    private fun miningToolHeld(): Boolean {
+        if (LocationAPI.island == SkyBlockIsland.THE_CATACOMBS) return false
+        val category = runCatching { MC.instance.player?.mainHandItem?.getData(DataTypes.CATEGORY) }.getOrNull() ?: return false
+        return category == SkyBlockCategory.PICKAXE || category == SkyBlockCategory.DRILL
+    }
 
     private fun predictSpread() {
         val level = MC.instance.level ?: return
         nextBlock = nextBlock?.takeIf { (pos, type) -> level.getBlockState(pos).block in type.blocks }
-        val hit = (MC.instance.hitResult as? BlockHitResult)?.takeIf { it.type == HitResult.Type.BLOCK && MC.instance.options.keyAttack.isDown }?.blockPos
+        if (!miningToolHeld()) { nextBlock = null; mining = null; return }
+        // Only a real break counts: the block vanished while you were still breaking it, not one you tapped and left.
+        mining?.let { breaking ->
+            if (!gone(level.getBlockState(breaking.pos).block)) return@let
+            mining = null
+            if (ticks - breaking.tick > 2) return@let
+            // Spread lands in the same tick as the break (every recorded sample), so the world shows what it took.
+            val taken = breaking.around.filter { gone(level.getBlockState(it).block) }
+            if (taken.isNotEmpty() && ThemeConfig.animationMode != GuiMotion.OFF) spreadBurst = taken to System.nanoTime()
+            val next = pickFollowUp(breaking.pos, breaking.type)
+            if (next != nextBlock?.first) nextShownAt = System.nanoTime()
+            nextBlock = next?.let { it to breaking.type }
+        }
+        val hit = (MC.instance.hitResult as? BlockHitResult)?.takeIf { it.type == HitResult.Type.BLOCK && MC.instance.options.keyAttack.isDown }?.blockPos?.immutable()
         val type = hit?.let { pos -> MiningBlock.currentlyActiveBlocks.firstOrNull { level.getBlockState(pos).block in it.blocks } }
-        if (hit != null && type != null) {
-            lastMined = hit to type
-            nextBlock = pickFollowUp(hit, type, spreadDone = false)?.let { it to type }
-            return
-        }
-        // Spread lands in the same tick as the break (every recorded sample), so re-pick from what really survived.
-        lastMined?.takeIf { (pos, _) -> gone(level.getBlockState(pos).block) }?.let { (pos, mined) ->
-            lastMined = null
-            nextBlock = pickFollowUp(pos, mined, spreadDone = true)?.let { it to mined }
-        }
+            ?.takeIf { spreadApplies(it.family) }
+        if (hit == null || type == null) return
+        val around = { NEIGHBOURS_26.map { (x, y, z) -> hit.offset(x, y, z) }.filter { level.getBlockState(it).block in type.family.blocks } }
+        val current = mining
+        if (current != null && current.pos == hit) { current.tick = ticks; if (ticks % 4 == 0) current.around = around() }
+        else mining = Breaking(hit, type, ticks, around())
     }
 
-    private fun pickFollowUp(mining: BlockPos, type: MiningBlock, spreadDone: Boolean): BlockPos? {
+    private fun pickFollowUp(mining: BlockPos, type: MiningBlock): BlockPos? {
         val level = MC.instance.level ?: return null
         val player = MC.instance.player ?: return null
         fun sameType(pos: BlockPos) = level.getBlockState(pos).block in type.blocks
@@ -234,52 +275,135 @@ object MiningFeatures : SkyMyceModule() {
         }
         val spread = spreadFor(type.family == MiningBlockFamily.GEMSTONES, miningSpread, gemstoneSpread, MiningConfig.spreadFallback, MiningConfig.gemstoneSpreadFallback)
         // Spread takes any block of the mined block's family (Titanium took Mithril and back), never stone.
-        return bestSpreadFollowUp(mining, candidates, { level.getBlockState(it).block in type.family.blocks }, ::open, spread.toDouble(), spreadDone) {
+        return bestSpreadFollowUp(mining, candidates, { level.getBlockState(it).block in type.family.blocks }, ::open, spread.toDouble(), spreadDone = true) {
             1 - look.dot(Vec3.atCenterOf(it).subtract(eye).normalize())
         }
     }
 
-    private fun findBlast(): Pair<BlockPos, List<BlockPos>>? {
-        if (!GlaciteAPI.inGlaciteTunnels()) return null
+    /** Open commissions' targets that are still in progress. */
+    private fun openCommissions() = CommissionsAPI.commissions.filter { it.progress < 1f }.mapNotNull { commissionTarget(it.name) }
+
+    /** Every block an open commission wants within the scan box around you, in this area's ore types. */
+    private fun scanCommissionBlocks(): List<BlockPos> {
+        val level = MC.instance.level ?: return emptyList()
+        val player = MC.instance.player ?: return emptyList()
+        val ores = openCommissions().flatMap { it.ores }.toSet()
+        if (ores.isEmpty()) return emptyList()
+        val blocks = MiningBlock.currentlyActiveBlocks.filter { block -> ores.any { oreMatches(block.name, block.family == MiningBlockFamily.GEMSTONES, it) } }
+            .flatMap { it.blocks }.toSet()
+        if (blocks.isEmpty()) return emptyList()
+        val origin = player.blockPosition()
+        return BlockPos.betweenClosed(origin.offset(-SCAN_XZ, -SCAN_Y, -SCAN_XZ), origin.offset(SCAN_XZ, SCAN_Y, SCAN_XZ))
+            .mapNotNull { pos -> pos.immutable().takeIf { level.getBlockState(it).block in blocks } }
+    }
+
+    /** The best Pickobulus centre among nearby veins: marked where you can hit it, otherwise an arrow leads to it. */
+    private fun findBlast(): Blast? {
         val level = MC.instance.level ?: return null
         val player = MC.instance.player ?: return null
-        val ores = CommissionsAPI.commissions.filter { it.area == CommissionArea.GLACITE_TUNNELS && it.progress < 1f }.mapNotNull { collectorOre(it.name) }.toSet()
-        val blocks = MiningBlock.entries.filter { it.name.substringAfterLast('_') in ores }.flatMap { it.blocks }.toSet()
-        if (blocks.isEmpty()) return null
+        if (!miningToolHeld() || commissionBlocks.isEmpty()) return null
         val eye = player.eyePosition
-        val origin = BlockPos.containing(eye)
-        val targets = BlockPos.betweenClosed(origin.offset(-BLAST_SCAN, -BLAST_SCAN, -BLAST_SCAN), origin.offset(BLAST_SCAN, BLAST_SCAN, BLAST_SCAN))
-            .mapNotNull { pos -> pos.immutable().takeIf { level.getBlockState(it).block in blocks } }
         val radius = MiningConfig.pickobulusRadius
-        // The thrown pickaxe lands on the first block in your line of sight, so only a visible centre is reachable.
+        val ranked = rankBlastCentres(commissionBlocks, radius)
+        val best = ranked.firstOrNull() ?: return null
+        // The thrown pickaxe lands on the first block in your line of sight, so a hittable centre must be visible and near.
         // shortcut: only target blocks are tried as centres; a hard stone block between two veins could score higher.
-        val centre = rankBlastCentres(targets, radius).take(64).firstOrNull { (pos, _) ->
-            level.clip(ClipContext(eye, Vec3.atCenterOf(pos), ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, player)).blockPos == pos
-        }?.first ?: return null
-        return centre to targets.filter { it.distSqr(centre) <= radius * radius }
+        val reachable = ranked.take(64).firstOrNull { (pos, score) ->
+            score >= best.second * 0.75 && Vec3.atCenterOf(pos).distanceTo(eye) <= BLAST_REACH &&
+                level.clip(ClipContext(eye, Vec3.atCenterOf(pos), ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, player)).blockPos == pos
+        }
+        val centre = (reachable ?: best).first
+        return Blast(centre, commissionBlocks.filter { it.distSqr(centre) <= radius * radius }, reachable != null)
+    }
+
+    /** Living mobs whose own or floating name matches an open slayer commission; real players never count. */
+    private fun findCommissionMobs(): List<Entity> {
+        val level = MC.instance.level ?: return emptyList()
+        val player = MC.instance.player ?: return emptyList()
+        val names = openCommissions().flatMap { it.mobs }
+        if (names.isEmpty()) return emptyList()
+        fun named(entity: Entity) = entity.customName?.string?.replace(LEGACY_CODES, "")?.let { text -> names.any { text.contains(it, ignoreCase = true) } } == true
+        fun mob(entity: Entity) = entity is LivingEntity && entity !is ArmorStand && entity.isAlive && !(entity is Player && entity.uuid.version() == 4)
+        val found = LinkedHashSet<Entity>()
+        for (entity in level.entitiesForRendering()) {
+            if (entity.distanceToSqr(player) > 48.0 * 48.0) continue
+            if (mob(entity) && named(entity)) { found += entity; continue }
+            // SkyBlock names most mobs with an armor stand floating just above them.
+            if (entity is ArmorStand && named(entity)) level.getEntities(entity, entity.boundingBox.inflate(0.6, 3.0, 0.6), ::mob)
+                .filter { it.y <= entity.y }.minByOrNull { it.distanceToSqr(entity) }?.let(found::add)
+        }
+        return found.toList()
     }
 
     @Subscription
     fun render(event: RenderWorldEvent.AfterTranslucent) {
         val next = nextBlock?.first
         val blast = blast
-        if (next == null && blast == null) return
+        val burst = spreadBurst
+        val highlight = if (MiningConfig.commissionHighlight) exposedNearest(commissionBlocks) else emptyList()
+        val mobs = commissionMobs
+        if (next == null && blast == null && burst == null && highlight.isEmpty() && mobs.isEmpty()) return
+        val now = System.nanoTime()
+        val mode = ThemeConfig.animationMode
+        val burstNanos = if (mode == GuiMotion.REDUCED) 200_000_000L else 450_000_000L
         MC.instance.levelRenderer.collectPerFrameGizmos().use {
-            next?.let { Gizmos.cuboid(AABB(it).inflate(0.004), GizmoStyle.stroke(HudTheme.alpha(SPREAD_COLOR, 100), 3f)).setAlwaysOnTop() }
-            blast?.let { (centre, hits) ->
-                hits.forEach { Gizmos.cuboid(AABB(it).inflate(0.002), GizmoStyle.fill(HudTheme.alpha(BLAST_COLOR, 25))) }
-                Gizmos.cuboid(AABB(centre).inflate(0.004), GizmoStyle.stroke(HudTheme.alpha(BLAST_COLOR, 100), 3f)).setAlwaysOnTop()
-                Gizmos.billboardText("Pickobulus · ~${hits.size} blocks", Vec3.atCenterOf(centre).add(0.0, 0.9, 0.0),
-                    TextGizmo.Style.forColorAndCentered(HudTheme.alpha(BLAST_COLOR, 100)).withScale(0.4f)).setAlwaysOnTop()
+            highlight.forEach { Gizmos.cuboid(AABB(it).inflate(0.002), GizmoStyle.fill(HudTheme.alpha(COMMISSION_COLOR, 22))) }
+            mobs.forEach { mob -> Gizmos.cuboid(mob.boundingBox.inflate(0.05), GizmoStyle.stroke(HudTheme.alpha(MOB_COLOR, 90), 2f)).setAlwaysOnTop() }
+            // Blocks the spread just took flash and expand away, so you see each proc.
+            burst?.let { (taken, at) ->
+                val t = (now - at).toDouble() / burstNanos
+                if (t >= 1.0) spreadBurst = null
+                else taken.forEach { Gizmos.cuboid(AABB(it).inflate(0.02 + 0.18 * t), GizmoStyle.fill(HudTheme.alpha(SPREAD_COLOR, (45 * (1 - t)).toInt()))) }
+            }
+            next?.let {
+                // The next block's outline settles in from slightly larger, instead of popping.
+                val t = if (mode == GuiMotion.OFF) 1.0 else ((now - nextShownAt) / 140_000_000.0).coerceIn(0.0, 1.0)
+                val ease = 1 - (1 - t) * (1 - t)
+                Gizmos.cuboid(AABB(it).inflate(0.004 + 0.12 * (1 - ease)), GizmoStyle.stroke(HudTheme.alpha(SPREAD_COLOR, (40 + 60 * ease).toInt()), 3f)).setAlwaysOnTop()
+            }
+            blast?.let { b ->
+                val label = "Pickobulus · ~${b.hits.size} blocks"
+                if (b.reachable) {
+                    b.hits.forEach { Gizmos.cuboid(AABB(it).inflate(0.002), GizmoStyle.fill(HudTheme.alpha(BLAST_COLOR, 25))) }
+                    Gizmos.cuboid(AABB(b.centre).inflate(0.004), GizmoStyle.stroke(HudTheme.alpha(BLAST_COLOR, 100), 3f)).setAlwaysOnTop()
+                    Gizmos.billboardText(label, Vec3.atCenterOf(b.centre).add(0.0, 0.9, 0.0),
+                        TextGizmo.Style.forColorAndCentered(HudTheme.alpha(BLAST_COLOR, 100)).withScale(0.4f)).setAlwaysOnTop()
+                } else MC.instance.player?.let { player ->
+                    // Out of reach or hidden: point the way from just in front of you to the best vein.
+                    val target = Vec3.atCenterOf(b.centre)
+                    val start = player.eyePosition.add(player.lookAngle.scale(1.2)).add(0.0, -0.4, 0.0)
+                    Gizmos.arrow(start, target, HudTheme.alpha(BLAST_COLOR, 85), 2f).setAlwaysOnTop()
+                    Gizmos.cuboid(AABB(b.centre).inflate(0.004), GizmoStyle.stroke(HudTheme.alpha(BLAST_COLOR, 100), 3f)).setAlwaysOnTop()
+                    Gizmos.billboardText("Best vein · ~${b.hits.size} blocks · ${target.distanceTo(player.eyePosition).toInt()}m", target.add(0.0, 0.9, 0.0),
+                        TextGizmo.Style.forColorAndCentered(HudTheme.alpha(BLAST_COLOR, 100)).withScale(0.5f)).setAlwaysOnTop()
+                }
             }
         }
     }
 
+    /** Commission blocks with an open face, nearest first and capped, so the highlight shows minable blocks without clutter. */
+    private fun exposedNearest(blocks: List<BlockPos>): List<BlockPos> {
+        val level = MC.instance.level ?: return emptyList()
+        val player = MC.instance.player ?: return emptyList()
+        if (blocks.isEmpty()) return emptyList()
+        if (exposedFor === blocks) return exposed
+        exposedFor = blocks
+        exposed = blocks.filter { pos -> Direction.entries.any { gone(level.getBlockState(pos.relative(it)).block) } }
+            .sortedBy { it.distSqr(player.blockPosition()) }.take(HIGHLIGHTED_BLOCKS)
+        return exposed
+    }
+    private var exposedFor: List<BlockPos>? = null
+    private var exposed: List<BlockPos> = emptyList()
+    private val LEGACY_CODES = Regex("§.")
+
     @Subscription
     fun onIslandChange(event: IslandChangeEvent) {
         nextBlock = null
-        lastMined = null
+        mining = null
+        spreadBurst = null
         blast = null
+        commissionBlocks = emptyList()
+        commissionMobs = emptyList()
         if (event.old == SkyBlockIsland.CRYSTAL_HOLLOWS) {
             totalTime += System.currentTimeMillis() - timeSince
         }
@@ -319,6 +443,33 @@ internal fun parseStat(lines: List<String>, stat: String) =
 /** The ore of a collector commission, e.g. "Umber Collector" -> UMBER and "Onyx Gemstone Collector" -> ONYX, matching [MiningBlock] name suffixes. */
 internal fun collectorOre(name: String) = name.takeIf { it.endsWith("Collector") }?.substringBefore(' ')?.uppercase()
 
+/** Mining Spread works on ores and gemstones; stone and Hard Stone are only ever broken by hand. */
+internal fun spreadApplies(family: MiningBlockFamily) = family != MiningBlockFamily.VANILLA_BLOCKS && family != MiningBlockFamily.HARD_STONE
+
+/** What a commission asks for: ore names in [MiningBlock] naming ("MITHRIL", "RUBY", "GEMSTONE" = any gemstone) or mob name parts. */
+internal data class CommissionTarget(val ores: Set<String> = emptySet(), val mobs: List<String> = emptyList())
+
+internal fun commissionTarget(name: String): CommissionTarget? {
+    collectorOre(name)?.let { return CommissionTarget(ores = setOf(it)) }
+    when {
+        name == "Hard Stone Miner" -> return CommissionTarget(ores = setOf("HARD_STONE"))
+        name.endsWith("Mithril") || name.startsWith("Mithril") -> return CommissionTarget(ores = setOf("MITHRIL"))
+        name.endsWith("Titanium") || name.startsWith("Titanium") -> return CommissionTarget(ores = setOf("TITANIUM"))
+    }
+    val mob = name.removeSuffix(" Slayer").removeSuffix(" Puncher").takeIf { it != name && it != "Mines" } ?: return null
+    return CommissionTarget(mobs = listOf(when (mob) {
+        // The Glacite slayer commission counts every Glacite mob, including the Mineshaft's Bowmen, Casters and Mages.
+        "Glacite Walker" -> "Glacite"
+        "Boss Corleone" -> "Corleone"
+        "Team Treasurite Member" -> "Team Treasurite"
+        else -> mob
+    }))
+}
+
+/** Whether a [MiningBlock] named [block] is the commission [ore]: exact, a tier variant (LOW_TIER_MITHRIL) or a variant family (HARD_STONE_*). */
+internal fun oreMatches(block: String, gemstone: Boolean, ore: String) =
+    if (ore == "GEMSTONE") gemstone else block == ore || block.endsWith("_$ore") || block.startsWith("${ore}_")
+
 /**
  * Chance Mining Spread takes one exposed block among the [pool] spreadable blocks around a broken one.
  * Fitted to 258 recorded Mithril/Titanium breaks at 288 spread: ~22% each with nine candidates. The +10 stands in for the
@@ -348,9 +499,13 @@ internal fun bestSpreadFollowUp(mining: BlockPos, candidates: Collection<BlockPo
     return scored.filterValues { it >= best * 0.95 }.keys.minBy(aimCost)
 }
 
-/** Blast centres ranked by how many [targets] lie within [radius] blocks of them. */
-internal fun rankBlastCentres(targets: List<BlockPos>, radius: Int) =
-    targets.map { c -> c to targets.count { it.distSqr(c) <= radius * radius } }.sortedByDescending { it.second }
+/** Blast centres ranked by how many [targets] lie within [radius] blocks of them; hashed, so thousands of blocks stay cheap. */
+internal fun rankBlastCentres(targets: List<BlockPos>, radius: Int): List<Pair<BlockPos, Int>> {
+    val present = targets.mapTo(HashSet(targets.size * 2)) { it.asLong() }
+    val offsets = (-radius..radius).flatMap { x -> (-radius..radius).flatMap { y -> (-radius..radius).map { z -> Triple(x, y, z) } } }
+        .filter { (x, y, z) -> x * x + y * y + z * z <= radius * radius }
+    return targets.map { c -> c to offsets.count { (x, y, z) -> BlockPos.offset(c.asLong(), x, y, z) in present } }.sortedByDescending { it.second }
+}
 
 /** Gemstone Spread drives gemstones and Mining Spread every other block; a stat missing from the tab list uses its fallback. */
 internal fun spreadFor(gemstone: Boolean, miningSpread: Int?, gemstoneSpread: Int?, miningFallback: Int, gemstoneFallback: Int) =

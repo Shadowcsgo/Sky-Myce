@@ -20,7 +20,7 @@ const object = (value: unknown): Record<string, unknown> | null => value !== nul
 const snowflake = (value: unknown): value is string => typeof value === "string" && /^\d{17,20}$/.test(value);
 const uuid = (value: unknown): value is string => typeof value === "string" && /^[a-f0-9]{32}$/i.test(value);
 const ephemeral = (content: string) => Response.json({ type: 4, data: { content, flags: 64, allowed_mentions: { parse: [] } } });
-const reads = new Set(["account", "devices", "sessions", "audit", "blacklist", "search", "overview", "lookup"]);
+const reads = new Set(["account", "devices", "sessions", "audit", "blacklist", "search", "overview", "lookup", "users"]);
 const managed = new Set(["blacklist_add", "blacklist_remove", "session_kick", "admin_add", "disconnect", "unlink"]);
 
 /** Only called after exact-body Discord signature and application verification. */
@@ -35,7 +35,7 @@ export function accountCommand(data: Record<string, unknown>, kind: "user" | "ba
     if (raw.length !== 1 || sub?.type !== 1 || typeof sub.name !== "string") return null;
     const aliases: Record<string, string> = kind === "user" ? { account_status: "status", account_link: "connect", account_unlink: "unlink", account_disconnect: "disconnect" } : {
       account_overview: "account", account_devices: "devices", account_sessions: "sessions", account_audit: "audit",
-      skyhawk_search: "search", skyhawk_lookup: "lookup", skyhawk_overview: "overview",
+      skyhawk_search: "search", skyhawk_lookup: "lookup", skyhawk_overview: "overview", skyhawk_users: "users",
       blacklist_info: "blacklist", blacklist_list: "blacklist", blacklist_add: "blacklist_add", blacklist_remove: "blacklist_remove",
       session_kick: "session_kick", admin_add: "admin_add" };
     action = aliases[`${action}_${sub.name}`];
@@ -45,7 +45,7 @@ export function accountCommand(data: Record<string, unknown>, kind: "user" | "ba
   } else if (!["connect", "status", "disconnect", "help"].includes(action)) return null;
   const fields: Record<string, number> = kind === "user" ? action === "connect" ? { code: 3 } : action === "unlink" ? { uuid: 3 } : {} :
     action.startsWith("blacklist") ? { user: 6, uuid: 3, reason: 3, page: 4 } : action === "search" ? { query: 3 } : action === "lookup" ? { "discord-id": 3 } :
-      action === "overview" ? {} : { user: 6, ...["devices", "sessions", "audit"].includes(action) ? { page: 4 } : {} };
+      action === "overview" ? {} : action === "users" ? { page: 4 } : { user: 6, ...["devices", "sessions", "audit"].includes(action) ? { page: 4 } : {} };
   const options: Record<string, unknown> = {};
   for (const rawOption of raw) {
     const item = object(rawOption);
@@ -69,7 +69,7 @@ export function accountCommand(data: Record<string, unknown>, kind: "user" | "ba
       if (action !== "blacklist" && (typeof options.reason !== "string" || !options.reason.trim())) return null;
       if (action === "blacklist" && options.reason !== undefined) return null;
     }
-  } else if (action === "search" || action === "overview") {
+  } else if (action === "search" || action === "overview" || action === "users") {
     target = "";
     if (action === "search" && (typeof options.query !== "string" || !options.query.trim() || options.query.length > 100)) return null;
   } else {
@@ -178,12 +178,16 @@ function reportMessage(command: ParsedCommand, result: CommunityResult): Message
   else if (command.action === "search") fields = (result.identities ?? []).slice(0, 8).map(identity => field(textName(identity.displayName ?? identity.username),
     `<@${identity.discordId}>\nMinecraft: ${identity.uuids.map(mc => textName(mc.name)).join(", ") || "None"}`));
   else if (command.action === "overview") fields = Object.entries(result.overview ?? {}).slice(0, 20).map(([name, value]) => field(textName(name.replaceAll("_", " ")), String(value), true));
+  else if (command.action === "users") fields = (result.users ?? []).slice(0, 8).map(user => field(`${textName(user.displayName ?? user.username)}${user.username ? ` (@${textName(user.username)})` : ""}`,
+    `<@${user.discordId}> · Minecraft: ${textName(user.minecraft ?? "None")}\nMod ${textName(user.modVersion ?? "version not reported")} · last seen ${discordTime(user.lastSeen)}`));
   // Keep the complete embed below Discord's 6,000-character aggregate limit even for long histories.
   fields = fields.map(value => ({ ...value, value: value.value.length > 600 ? `${value.value.slice(0, 568)}\nFurther associations omitted.` : value.value }));
-  return { content: `**Private Sky-Myce ${command.action} report${snowflake(command.target) ? ` for <@${command.target}>` : ""}**\n${fields.length ? `Page ${page}` : "No matching records."}`,
+  const totals = command.action === "users" && result.overview ? `\n${result.overview.users} Discord accounts have used the mod; ${result.overview.active_7_days} in the last 7 days. Next page: \`page:${page + 1}\`.` : "";
+  return { content: `**Private Sky-Myce ${command.action} report${snowflake(command.target) ? ` for <@${command.target}>` : ""}**\n${fields.length ? `Page ${page}` : "No matching records."}${totals}`,
     embeds: fields.length ? [{ title: command.action === "devices" ? "Informational device associations" : `Community ${command.action}`, color: 0x4d88c7, fields,
       footer: { text: command.action === "devices" ? "Administrative metadata only · shared/changed devices never authorize, punish or block users" : "Private administrator report" } }] : [],
-    components: pageControls(command.action, command.target, page, entries?.length ?? 0) };
+    // The Gateway forwards page buttons only for older reports; users pages with the page option instead.
+    components: command.action === "users" ? [] : pageControls(command.action, command.target, page, entries?.length ?? 0) };
 }
 function auditMetadata(raw: unknown): Record<string, unknown> {
   if (typeof raw !== "string" || raw.length > 16384) return {};

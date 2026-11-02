@@ -46,6 +46,21 @@ fun main() {
 
     check(collectorOre("Umber Collector") == "UMBER" && collectorOre("Onyx Gemstone Collector") == "ONYX")
     check(collectorOre("Glacite Walker Slayer") == null)
+    // Commission targets: blocks for miner/collector commissions, mobs for slayers (Glacite covers Mineshaft mobs).
+    check(commissionTarget("Ruby Gemstone Collector") == CommissionTarget(ores = setOf("RUBY")))
+    check(commissionTarget("Gemstone Collector") == CommissionTarget(ores = setOf("GEMSTONE")))
+    check(commissionTarget("Mithril Miner")!!.ores == setOf("MITHRIL") && commissionTarget("Royal Mines Mithril")!!.ores == setOf("MITHRIL"))
+    check(commissionTarget("Upper Mines Titanium")!!.ores == setOf("TITANIUM") && commissionTarget("Hard Stone Miner")!!.ores == setOf("HARD_STONE"))
+    check(commissionTarget("Glacite Walker Slayer") == CommissionTarget(mobs = listOf("Glacite")))
+    check(commissionTarget("Treasure Hoarder Puncher")!!.mobs == listOf("Treasure Hoarder") && commissionTarget("Boss Corleone Slayer")!!.mobs == listOf("Corleone"))
+    check(commissionTarget("Mines Slayer") == null && commissionTarget("Mineshaft Explorer") == null && commissionTarget("Corpse Looter") == null)
+    check(oreMatches("LOW_TIER_MITHRIL", false, "MITHRIL") && oreMatches("TITANIUM", false, "TITANIUM") && !oreMatches("TITANIUM", false, "MITHRIL"))
+    check(oreMatches("HARD_STONE_MINESHAFT", false, "HARD_STONE") && oreMatches("LOW_TIER_UMBER", false, "UMBER") && !oreMatches("GLACITE", false, "UMBER"))
+    check(oreMatches("RUBY", true, "GEMSTONE") && !oreMatches("TITANIUM", false, "GEMSTONE"))
+    // Hashed blast ranking: a 3x3x3 vein beats a far single block, and counts stay exact.
+    val blastVein = (0..2).flatMap { x -> (0..2).flatMap { y -> (0..2).map { z -> BlockPos(x, y, z) } } } + BlockPos(40, 0, 0)
+    val veinRanked = rankBlastCentres(blastVein, 1)
+    check(veinRanked.first() == (BlockPos(1, 1, 1) to 7) && veinRanked.last() == (BlockPos(40, 0, 0) to 1)) { veinRanked.take(2).toString() }
     check(parseStat(listOf("Stats:", " Mining Speed: ⸕1,234", " Mining Spread: ▚1,050"), "Mining Spread") == 1050)
     check(parseStat(listOf(" Mining Speed: ⸕1,234"), "Mining Spread") == null)
     check(spreadFor(true, 300, 50, 100, 100) == 50 && spreadFor(false, 300, 50, 100, 100) == 300)
