@@ -64,6 +64,15 @@ data class SettingRow(val path: String, val element: ResourcefulConfigEntryEleme
     }
 }
 
+internal fun settingIsDefault(entry: ResourcefulConfigValueEntry): Boolean {
+    fun normalized(value: Any?): Any? = when (value) {
+        is Array<*> -> value.toList(); is IntArray -> value.toList(); is LongArray -> value.toList()
+        is DoubleArray -> value.toList(); is BooleanArray -> value.toList(); is Collection<*> -> value.toList()
+        else -> value
+    }
+    return if (entry.isArray) entry.array.toList() == normalized(entry.defaultValue()) else normalized(entry.get()) == normalized(entry.defaultValue())
+}
+
 fun settingRows(config: ResourcefulConfig, prefix: String = ""): List<SettingRow> = buildList {
     config.elements().filterIsInstance<ResourcefulConfigEntryElement>().filter { !it.isHidden && it.entry() is ResourcefulConfigValueEntry }
         .forEach { add(SettingRow(prefix + it.id(), it)) }
@@ -222,7 +231,9 @@ class SettingsScreen @JvmOverloads constructor(
     private var editingDungeonFriend = dungeonFriend
     private var friendDraft: FriendPreferenceDraft? = null
     private var availabilityDraft: FriendPreferenceDraft? = null
-    private var routingAdvanced = false
+    /** "featureId/TIER" sections the player expanded; survives repopulating this screen. */
+    private val openTiers = HashSet<String>()
+    private val resetButtons = ArrayList<Pair<SettingRow, ButtonComponent>>()
     private class FriendPreferenceDraft(val group: String?, val friend: String?) {
         var floor = DungeonFriendsSettings.availability.floor
         var classes = if (group == "Availability") DungeonFriendsSettings.availability.classes
@@ -264,7 +275,7 @@ class SettingsScreen @JvmOverloads constructor(
 
     private fun populate(animate: Boolean = true) {
         if (animate) contentChanged()
-        controls.clear(); body.clearChildren()
+        controls.clear(); resetButtons.clear(); body.clearChildren()
         heading.clearChildren()
         heading.child(if (query.isBlank()) settingsBreadcrumb(category, catalog.findFeature(featureId).takeIf { featureScoped },
             detailWidth, { changed }, { section -> navigateMenu(MenuDirectoryScreen(category, section = section)) }, { openMenuFeature(it) })
@@ -297,21 +308,23 @@ class SettingsScreen @JvmOverloads constructor(
                 child(label(owner.title, MenuTheme.TEXT, 12f))
                 child(label(if (query.isBlank()) owner.description else owner.breadcrumb, MenuTheme.MUTED, 9f))
             }, reset, detailWidth))
-            if (owner.id == "starred-routes") {
-                settingGroups(settings, owner.id).forEach { (group, entries) ->
-                    if (group == "Advanced") {
-                        if (entries.any { it.path == pendingSetting }) routingAdvanced = true
-                        body.child(MenuCollapsible(Sizing.fill(), Sizing.content(), Component.literal(group),
-                            routingAdvanced || query.isNotBlank()).apply {
-                            onToggled().subscribe { routingAdvanced = it }
-                            entries.forEach { child(editor(it)) }
-                        })
-                    } else {
-                        body.child(label(group, MenuTheme.MUTED, 10f))
-                        entries.forEach { body.child(editor(it)) }
-                    }
-                }
-            } else settings.forEach { setting -> body.child(editor(setting)) }
+            val tiers = settings.groupBy { MenuCatalog.settingTier(it.path) }
+            val basic = tiers[SettingTier.BASIC].orEmpty()
+            if (owner.id == "starred-routes") settingGroups(basic, owner.id).forEach { (group, entries) ->
+                body.child(label(group, MenuTheme.MUTED, 10f))
+                entries.forEach { body.child(editor(it)) }
+            } else basic.forEach { setting -> body.child(editor(setting)) }
+            for (tier in listOf(SettingTier.ADVANCED, SettingTier.EXPERT)) {
+                val entries = tiers[tier].orEmpty().ifEmpty { continue }
+                val key = "${owner.id}/$tier"
+                if (entries.any { it.path == pendingSetting }) openTiers += key
+                // Search results are never hidden behind a collapsed section.
+                body.child(MenuCollapsible(Sizing.fill(), Sizing.content(), Component.literal("${tier.title} (${entries.size})"),
+                    key in openTiers || query.isNotBlank()).apply {
+                    onToggled().subscribe { if (it) openTiers += key else openTiers -= key }
+                    entries.forEach { child(editor(it)) }
+                })
+            }
             if (availability && editingDungeonFriend == null) body.child(friendPreferences(true))
             if (preferences || owner.id == "party-finder" && editingDungeonFriend != null) body.child(friendPreferences(false).also {
                 editingDungeonFriend?.let { name -> controls["friend/$name"] = it }
@@ -435,7 +448,7 @@ class SettingsScreen @JvmOverloads constructor(
                 child(label("Off: route directly toward Blood.", MenuTheme.MUTED, 8f))
                 child(label("Mob markers are separate.", MenuTheme.MUTED, 8f))
             }
-            child(pinControl(setting))
+            child(settingActions(setting))
             return@apply
         }
         child(label(setting.title, size = 11f))
@@ -505,8 +518,18 @@ class SettingsScreen @JvmOverloads constructor(
                 }
             }
         }
-        if (canPinMenuSetting(setting)) child(pinControl(setting))
+        child(settingActions(setting, canPinMenuSetting(setting)))
     }.also { controls[setting.path] = it }
+
+    /** Pin (when eligible) and Reset, which is enabled only while the value differs from its default. */
+    private fun settingActions(setting: SettingRow, pin: Boolean = true): FlowLayout = settingsRow().apply {
+        if (pin) child(pinControl(setting))
+        child(button("Reset", 52, "Restore the default for ${setting.title}") {
+            setting.entry.reset()
+            if (setting.path == "openConfigKey") SkyMyceCommands.updateSettingsKey()
+            keyCapture = null; edited(); populate()
+        }.also { resetButtons += setting to it; it.active = !settingIsDefault(setting.entry) })
+    }
 
     private fun pinControl(setting: SettingRow) = button(if (MenuShortcuts.isPinned(setting.path)) "Unpin" else "Pin", 58,
         "${catalog.featureForPath(setting.path)?.breadcrumb} → ${setting.title}. Add or remove this canonical control from Quick Settings.") { anchor ->
@@ -519,6 +542,7 @@ class SettingsScreen @JvmOverloads constructor(
 
     override fun tick() {
         super.tick()
+        resetButtons.forEach { (setting, button) -> button.active = !settingIsDefault(setting.entry) }
         val path = pendingSetting ?: return
         val component = controls[path] ?: return
         if (component.parent() == null) return

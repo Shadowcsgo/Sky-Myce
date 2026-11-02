@@ -387,6 +387,9 @@ data class MenuFeature(
     val breadcrumb get() = listOf(category.title, subcategory, title).distinct().joinToString(" → ")
 }
 
+/** Progressive disclosure: Basic is visible, Advanced and Expert start collapsed. Presentation only; paths and values never change. */
+enum class SettingTier(val title: String) { BASIC("Basic"), ADVANCED("Advanced"), EXPERT("Expert") }
+
 data class MenuSettingLocation(val category: MenuCategory, val subcategory: String, val featureId: String? = null)
 
 data class MenuSearchEntry(
@@ -471,6 +474,24 @@ class MenuCatalog(rows: List<SettingRow>) {
             MenuFeature("settings-hud", "HUD", "Arrange widgets, visibility and scale", MenuCategory.APPEARANCE, "HUD and Widgets", listOf("hud", "overlay", "layout", "widget", "scale", "visibility"), tool = "hud-editor"),
             MenuFeature("settings-controls", "Controls", "Choose the key that opens the Sky-Myce menu", MenuCategory.SETTINGS, "Controls and Keybinds", listOf("keybind", "keyboard", "input", "controls")),
         )
+
+        /** Tuning, layout and appearance details; shown collapsed under each feature, always found by search. */
+        private val advancedSettingKeys = setOf("opacity", "backgroundOpacity", "thickness", "lineHeight", "renderDistance", "framesPerSecond",
+            "previewFramesPerSecond", "fieldOfView", "yawOffset", "pitchOffset", "offsetX", "offsetY", "offsetZ", "aspect", "width", "height",
+            "border", "stageLabel", "reactionTime", "averageWindow", "bestsClock", "precise", "showServerTime", "levelsMetric", "levelsTarget",
+            "bazaarPriceType", "auctionPriceType", "safeRerollThreshold", "negativeProfitThreshold", "requeueDelay", "autoNucleusWarpMin",
+            "autoNucleusWarpMax", "pickobulusRadius", "openingDelay", "retainedRngEvents", "previewSize", "animateGifs", "mentionSounds",
+            "emojiInNormalChat", "maxDisplayedRequirements", "reminderQuietStart", "reminderQuietEnd", "reminderReadyPercent",
+            "partyCommandCooldown", "wordsPerMinute", "minimumSeconds", "inInventories", "thousandsSeparators", "splitExtra", "showMaximum",
+            "showHealer", "alwaysShowSoilGhosts", "applyLearned", "originalTooltips")
+        /** Diagnostics and technical configuration that ordinary play never needs. */
+        private val expertSettingPaths = setOf("Dungeons/Starred Clear Routing/debug", "Dungeons/Starred Clear Routing/automaticRecalculation",
+            "Mining/recordSpread", "Mining/spreadFallback", "Mining/gemstoneSpreadFallback", "General/Party Commands/hypixelApiKey", "devMode")
+        fun settingTier(path: String): SettingTier = when {
+            path in expertSettingPaths -> SettingTier.EXPERT
+            path.substringAfterLast('/') in advancedSettingKeys -> SettingTier.ADVANCED
+            else -> SettingTier.BASIC
+        }
 
         val routingSettingGroups = linkedMapOf(
             "Route" to listOf("enabled", "bloodRushClassesOnly", "routeThroughMobs", "routeThroughStarredMinibosses", "showRoute"),

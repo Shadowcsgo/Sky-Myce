@@ -1,5 +1,7 @@
 package me.mycellium.skymyce.hud
 
+import me.mycellium.skymyce.ui.MenuCatalog
+import me.mycellium.skymyce.ui.SettingTier
 import io.wispforest.owo.ui.core.Sizing
 import io.wispforest.owo.ui.core.Insets
 import io.wispforest.owo.ui.core.Size
@@ -126,6 +128,24 @@ fun checkSettings() {
     check(settingGroups(rows, "party-finder").values.flatten().all {
         it.path.startsWith("Party Finder/") || it.path.startsWith("Dungeons/Dungeon Friends/")
     })
+    // Progressive disclosure: every row has a tier, each feature keeps something Basic, and diagnostics are Expert.
+    check(MenuCatalog.settingTier("Dungeons/Starred Clear Routing/debug") == SettingTier.EXPERT)
+    check(MenuCatalog.settingTier("Dungeons/Healer Crush Camera/yawOffset") == SettingTier.ADVANCED)
+    check(MenuCatalog.settingTier("Dungeons/Starred Clear Routing/enabled") == SettingTier.BASIC)
+    catalog.features.filter { it.settings.isNotEmpty() }.forEach { feature ->
+        check(feature.settings.any { MenuCatalog.settingTier(it.path) == SettingTier.BASIC }) { "${feature.id} hides every setting behind Advanced" }
+    }
+    check(rows.count { MenuCatalog.settingTier(it.path) != SettingTier.BASIC } in 30..90) { "Tiering hides too few or too many settings" }
+    check(catalog.search("yaw").any { it.settingPath == "Dungeons/Healer Crush Camera/yawOffset" }) { "Search must find Advanced settings" }
+    // Reset is offered only for changed values, for scalars and arrays alike.
+    for (path in listOf("Dungeons/valuableItemThreshold", "General/autoRefill")) {
+        val entry = rows.single { it.path == path }.entry
+        check(settingIsDefault(entry)) { "$path did not start at its default" }
+        if (entry.isArray) check(entry.setArray(if (entry.array.isEmpty()) arrayOf(entry.objectType().enumConstants.first()) else emptyArray()))
+        else check(entry.setInt(entry.int + 1))
+        check(!settingIsDefault(entry)) { "$path change was not detected" }
+        entry.reset(); check(settingIsDefault(entry)) { "$path reset was not detected" }
+    }
     val decimal = rows.single { it.path == "Dungeons/negativeProfitThreshold" }.entry
     check(settingNumber(decimal, "100.5") == 100.5)
     listOf("NaN", "Infinity", "-1", "", "1000000000001").forEach { check(settingNumber(decimal, it) == null) }
