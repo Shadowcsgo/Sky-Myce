@@ -88,7 +88,7 @@ fun checkSettings() {
     check(commandRows.map { it.path }.distinct().size == commandRows.size)
     check(commandRows.none { it.path.endsWith("/themeVersion") || it.path.endsWith("/menuIntroPlayed") })
     check(commandRows.filter { it.path.startsWith("Theme & Appearance/") }.map { it.path }.toSet() ==
-        setOf("Theme & Appearance/preset", "Theme & Appearance/graphicsQuality")) { "Appearance must expose exactly Theme and Graphics mode" }
+        setOf("Theme & Appearance/preset", "Theme & Appearance/graphicsQuality", "Theme & Appearance/motion")) { "Appearance must expose exactly Theme, Graphics mode and Animations" }
     val categoryPaths = me.mycellium.skymyce.ui.MenuCategory.entries.flatMap {
         commandCenterSettings(catalog, commandRows, it, "").map { row -> row.path }
     }

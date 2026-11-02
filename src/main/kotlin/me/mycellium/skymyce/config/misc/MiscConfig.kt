@@ -14,6 +14,7 @@ import me.mycellium.skymyce.hud.ThemePalette
 import me.mycellium.skymyce.hud.ThemePreset
 import me.mycellium.skymyce.ui.GuiMotion
 import me.mycellium.skymyce.ui.GuiQuality
+import me.mycellium.skymyce.ui.MotionPreference
 import org.lwjgl.glfw.GLFW
 
 object GeneralConfig : CategoryKt("General") {
@@ -68,16 +69,21 @@ object ThemeConfig : CategoryKt("Theme & Appearance") {
     }
     var graphicsQuality by enum(GuiQuality.AUTO) {
         name = TranslatableValue.literal("Graphics mode")
-        description = TranslatableValue.literal("Extremely Light and Light keep Sky-Myce's menus plain and turn GUI animations off. Medium adds shadows, glow and animations; High is the fullest. Text is drawn at full resolution in every mode. Auto keeps Medium animations. " +
+        description = TranslatableValue.literal("Extremely Light and Light keep Sky-Myce's menus plain. Medium adds shadows, glow and background blur; High is the fullest. Text is drawn at full resolution in every mode. With Animations on Match, the Light modes also turn animations off and Auto keeps Medium animations. " +
             "Auto (recommended) moves between these to hold 60 FPS, never above your frame limit; /sm graphics shows what it chose. HUD information is never reduced, and Minecraft's own settings are untouched.")
+    }
+    var motion by enum(MotionPreference.MATCH) {
+        name = TranslatableValue.literal("Animations")
+        description = TranslatableValue.literal("How menus move. Match follows the graphics mode (off in Light and Extremely Light). Reduced keeps short hover and press feedback " +
+            "without sliding or scaling; Off is instant. Rapid clicks always jump to the latest page instead of queuing animations.")
     }
     var menuIntroPlayed by boolean(false) { condition = { false } }
 
     private var pinnedMotion: GuiMotion? = null
 
-    /** Not a setting: GUI animations follow the graphics mode; Auto keeps Medium so motion never switches mid-session. Checks may pin a mode. */
+    /** The chosen [motion], or (Match) the graphics mode's; Auto keeps Medium so motion never switches mid-session. Checks may pin a mode. */
     var animationMode: GuiMotion
-        get() = pinnedMotion ?: when (graphicsQuality) {
+        get() = pinnedMotion ?: motion.motion ?: when (graphicsQuality) {
             GuiQuality.EXTREMELY_LIGHT, GuiQuality.LIGHT -> GuiMotion.OFF
             GuiQuality.HIGH -> GuiMotion.HEAVY
             else -> GuiMotion.MEDIUM

@@ -466,6 +466,7 @@ class MenuCatalog(rows: List<SettingRow>) {
             MenuFeature("sign-confirm", "Sign Enter", "Press Enter to finish Auction House, Bazaar and other signs", MenuCategory.GAMEPLAY, "Inventory and Interactions", listOf("sign", "enter", "confirm", "ah", "bazaar", "price", "bid", "amount", "done")),
             MenuFeature("information", "Information Overlays", "Display client details and skill XP progress", MenuCategory.GAMEPLAY, "Information", listOf("xp", "skill", "client", "hud", "overlay")),
             MenuFeature("settings-appearance", "Appearance", "Theme preset: palette and component style for every menu and HUD widget", MenuCategory.APPEARANCE, "Themes and Colors", listOf("theme", "colors", "preset", "palette", "style")),
+            MenuFeature("settings-motion", "Animations", "Choose how much menus move, from Expressive to Off; Reduced keeps hover and press feedback", MenuCategory.APPEARANCE, "Animations", listOf("animation", "animations", "motion", "reduced motion", "accessibility", "transitions", "smooth")),
             MenuFeature("settings-graphics", "Performance & Graphics", "Graphics mode: shadows, glow, background blur and GUI animations. Auto adapts to hold 60 FPS; text stays sharp in every mode", MenuCategory.SETTINGS, "Performance and Graphics", listOf("animation", "animations", "motion", "accessibility", "reduced motion", "fps", "graphics", "quality", "rendering", "performance", "blur", "lag")),
             MenuFeature("settings-hud", "HUD", "Arrange widgets, visibility and scale", MenuCategory.APPEARANCE, "HUD and Widgets", listOf("hud", "overlay", "layout", "widget", "scale", "visibility"), tool = "hud-editor"),
             MenuFeature("settings-controls", "Controls", "Choose the key that opens the Sky-Myce menu", MenuCategory.SETTINGS, "Controls and Keybinds", listOf("keybind", "keyboard", "input", "controls")),
@@ -523,6 +524,7 @@ class MenuCatalog(rows: List<SettingRow>) {
                 path == "General/displayAbilityCooldown" || path == "General/displayAbilityNotification" -> "ability-cooldowns"
                 path == "General/clientInfo" || path == "General/displayXp" || path == "General/displayXpBar" -> "information"
                 path == "Theme & Appearance/graphicsQuality" -> "settings-graphics"
+                path == "Theme & Appearance/motion" -> "settings-motion"
                 path.startsWith("Theme & Appearance/") -> "settings-appearance"
                 else -> "settings-controls"
             }

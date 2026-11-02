@@ -910,6 +910,19 @@ internal class MenuNavigation(private val layout: MenuLayout, private val active
         if (isInBoundingBox(px, py)) px to py else null
 }
 
+/** A favorite or recent Home entry that still exists in the catalog. */
+internal data class MenuHomeShortcut(val id: String, val title: String, val iconId: Int, val description: String)
+
+internal fun menuHomeShortcuts(ids: List<String>, limit: Int, catalog: MenuCatalog = MenuDirectory.catalog): List<MenuHomeShortcut> =
+    ids.asSequence().mapNotNull { id ->
+        if (id.startsWith("setting:")) catalog.settingEntry(id.removePrefix("setting:"))?.let { entry ->
+            MenuHomeShortcut(id, entry.title, catalog.findFeature(entry.featureId)?.iconId ?: entry.category.iconId, entry.breadcrumb)
+        } else catalog.findFeature(id)?.let { MenuHomeShortcut(id, it.title, it.iconId, it.description) }
+    }.take(limit.coerceAtLeast(0)).toList()
+
+internal fun openMenuHomeShortcut(id: String) = if (id.startsWith("setting:")) openMenuSetting(id.removePrefix("setting:")) else openMenuFeature(id)
+
+/** Personal dashboard: search first, your tools, then favorites and recent. Categories live in the rail only. */
 internal class MenuHomeScreen : MenuScreen(Component.literal("Sky-Myce")) {
     override val home get() = true
     override val menuCategory get() = null
@@ -925,6 +938,9 @@ internal class MenuHomeScreen : MenuScreen(Component.literal("Sky-Myce")) {
                 sizing(Sizing.fixed(42), Sizing.fixed(22)); tooltip(Component.literal("Customize the six Home tools"))
             })
         })
+        root.child(MenuButton(Component.literal("Search features and settings")) { navigateMenu(MenuDirectoryScreen()) }.apply {
+            sizing(Sizing.fill(), Sizing.fixed(26)); tooltip(Component.literal("Every category at once; results show where each item lives"))
+        })
         val available = (menuWidth - padding * 2).coerceAtLeast(1)
         val list = UIContainers.verticalFlow(Sizing.fill(), Sizing.content()).apply {
             gap(10); padding(Insets.of(2))
@@ -939,12 +955,12 @@ internal class MenuHomeScreen : MenuScreen(Component.literal("Sky-Myce")) {
                 menuNavigationDescription(index, toolWidth - 60, feature))
         }
         val toolRows = (tools.size + toolColumns - 1) / toolColumns
-        val categoryRows = (MenuCategory.entries.size + columns - 1) / columns
         val minimumHeight = tools.maxOf { (_, title, description) ->
             29 + title.size * MenuCanvas.lineHeight(12.0) + description.size * MenuCanvas.lineHeight(9.0)
         }.coerceAtLeast(86)
-        val fixedHeight = padding * 2 + maxOf(22, MenuCanvas.lineHeight(19.0)) + 26 + 20 + 4 +
-            MenuCanvas.lineHeight(11.0) + categoryRows * 36 + (toolRows + categoryRows) * 10
+        // Header, search, and two shortcut sections (heading + one 36px row) around the tool rows.
+        val fixedHeight = padding * 2 + maxOf(22, MenuCanvas.lineHeight(19.0)) + 10 + 26 + 10 + 4 +
+            2 * (maxOf(20, MenuCanvas.lineHeight(11.0)) + 10 + 36 + 10) + toolRows * 10
         val toolHeight = maxOf(minimumHeight, (menuHeight - fixedHeight) / toolRows.coerceAtLeast(1))
         tools.chunked(toolColumns).forEach { row -> list.child(
             UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply {
@@ -960,28 +976,37 @@ internal class MenuHomeScreen : MenuScreen(Component.literal("Sky-Myce")) {
                     })
                 }
             }) }
-        list.child(MenuLabel(Component.literal("Categories")).apply {
-            fontSize = 11f; color(Color.ofRgb(MenuTheme.MUTED)); horizontalSizing(Sizing.fill())
-        })
-        MenuCategory.entries.chunked(columns).forEach { categories -> list.child(
-            UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply {
+        fun shortcuts(heading: String, view: MenuDirectoryView, ids: List<String>, empty: String) {
+            val items = menuHomeShortcuts(ids, columns)
+            list.child(UIContainers.horizontalFlow(Sizing.fill(), Sizing.fixed(maxOf(20, MenuCanvas.lineHeight(11.0)))).apply {
+                gap(6); verticalAlignment(VerticalAlignment.CENTER)
+                child(MenuLabel(Component.literal(heading)).apply { fontSize = 11f; color(Color.ofRgb(MenuTheme.MUTED)); horizontalSizing(Sizing.expand()) })
+                if (ids.isNotEmpty()) child(MenuButton(Component.literal("All")) { navigateMenu(MenuDirectoryScreen(view = view)) }.apply {
+                    sizing(Sizing.fixed(34), Sizing.fixed(18)); tooltip(Component.literal("Show all ${heading.lowercase()}"))
+                })
+            })
+            if (items.isEmpty()) {
+                list.child(MenuLabel(Component.literal(empty)).apply { color(Color.ofRgb(MenuTheme.MUTED)); horizontalSizing(Sizing.fill()) })
+                return
+            }
+            list.child(UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply {
                 gap(8)
-                categories.forEach { category ->
-                    val title = navigationTextLines(category.title, (tileWidth - 48).coerceAtLeast(1), 10.0, true, 2)
-                    child(object : MenuButton(Component.literal(category.title), { openMenuCategory(category) }) {
+                items.forEach { item ->
+                    val title = navigationTextLines(item.title, (tileWidth - 48).coerceAtLeast(1), 10.0, true, 2)
+                    child(object : MenuButton(Component.literal(item.title), { openMenuHomeShortcut(item.id) }) {
                         override fun interactionPose(hover: Double, press: Double) = MotionPose()
                         override fun paint(graphics: MenuGraphics, delta: Float, hover: Double, chosen: Double, press: Double) =
                             paintMenuHomeTile(graphics.canvas, MenuRect(x.toDouble(), y.toDouble(), width.toDouble(), height.toDouble()),
-                                title, emptyList(), category.iconId, hover, isFocused, compact = true)
+                                title, emptyList(), item.iconId, hover, isFocused, compact = true)
                     }.apply {
-                        sizing(Sizing.fixed(tileWidth), Sizing.fixed(36)); tooltip(Component.literal(category.description))
+                        sizing(Sizing.fixed(tileWidth), Sizing.fixed(36)); tooltip(Component.literal(item.description))
                     })
                 }
-            }) }
+            })
+        }
+        shortcuts("Favorites", MenuDirectoryView.FAVORITES, MenuShortcuts.favorites, "Star a feature or setting to keep it here.")
+        shortcuts("Recent", MenuDirectoryView.RECENT, MenuShortcuts.recent, "Features you open appear here.")
         root.child(menuScroll(Sizing.fill(), Sizing.expand(), list))
-        root.child(MenuButton(Component.literal("Search features and settings")) { navigateMenu(MenuDirectoryScreen()) }.apply {
-            sizing(Sizing.fill(), Sizing.fixed(26))
-        })
     }
 }
 

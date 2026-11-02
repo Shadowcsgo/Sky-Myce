@@ -71,6 +71,18 @@ fun checkThemes() {
             ThemeConfig.graphicsQuality = quality
             check(ThemeConfig.animationMode == motion) { "$quality must use $motion animations" }
         }
+        // An explicit animation choice overrides the graphics mode; Match restores the old pairing.
+        val previousMotion = ThemeConfig.motion
+        try {
+            ThemeConfig.graphicsQuality = GuiQuality.LIGHT
+            ThemeConfig.motion = me.mycellium.skymyce.ui.MotionPreference.BALANCED
+            check(ThemeConfig.animationMode == GuiMotion.MEDIUM) { "Light graphics overrode a chosen animation level" }
+            ThemeConfig.graphicsQuality = GuiQuality.HIGH
+            ThemeConfig.motion = me.mycellium.skymyce.ui.MotionPreference.REDUCED
+            check(ThemeConfig.animationMode == GuiMotion.REDUCED)
+            ThemeConfig.motion = me.mycellium.skymyce.ui.MotionPreference.MATCH
+            check(ThemeConfig.animationMode == GuiMotion.HEAVY)
+        } finally { ThemeConfig.motion = previousMotion }
         ThemeConfig.graphicsQuality = GuiQuality.HIGH
         ThemePreset.entries.forEach { preset ->
             ThemeConfig.preset = preset

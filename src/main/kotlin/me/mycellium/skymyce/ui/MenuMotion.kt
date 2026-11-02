@@ -29,6 +29,14 @@ enum class GuiMotion(private val title: String) {
     }
 }
 
+/** The user's animation choice; Match keeps the long-standing "animations follow graphics mode" behavior. */
+enum class MotionPreference(private val title: String, val motion: GuiMotion? = null) {
+    MATCH("Match graphics mode"), EXPRESSIVE("Expressive", GuiMotion.HEAVY), BALANCED("Balanced", GuiMotion.MEDIUM),
+    SUBTLE("Subtle", GuiMotion.LIGHT), REDUCED("Reduced (feedback only)", GuiMotion.REDUCED), OFF("Off", GuiMotion.OFF);
+
+    override fun toString() = title
+}
+
 /** Shared physical treatment; raster quality remains a separate rendering preference. */
 data class MotionProfile(
     val cardLift: Double,

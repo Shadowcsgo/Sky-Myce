@@ -200,6 +200,12 @@ fun main() {
     check(catalog.search("API fallback").none { it.settingPath?.endsWith("/hypixelApiKey") == true && it.quickSettingEligible })
     // Category terms can narrow a natural query without adding another feature home.
     check(catalog.search("economy friends").all { it.category == MenuCategory.ECONOMY || it.settingPath == "Community Sharing/economy" })
+    // Home favorites/recent: stale ids vanish, settings resolve to their owning feature's icon, the row limit holds.
+    val homeIds = listOf("auction-browser", "removed-feature", "setting:Dungeons/Starred Clear Routing/opacity", "setting:Gone/key", "rng-journal", "daily-digest")
+    val home = menuHomeShortcuts(homeIds, 3, catalog)
+    check(home.map { it.id } == listOf("auction-browser", "setting:Dungeons/Starred Clear Routing/opacity", "rng-journal")) { home.toString() }
+    check(home[1].iconId == catalog.findFeature("starred-routes")!!.iconId && home[1].description.startsWith("Dungeons →"))
+    check(menuHomeShortcuts(homeIds, 0, catalog).isEmpty())
     val everyday = me.mycellium.skymyce.commands.commandHelpLines("")
     check(everyday.size == me.mycellium.skymyce.commands.commandHelp.count { it.everyday } + 1 && everyday.none { "ircaction" in it || "lfgreply" in it || "profile" in it })
     check(me.mycellium.skymyce.commands.commandHelpLines("garden").any { "/sm greenhouse help" in it }) { "Help search missed advanced commands" }
