@@ -16,6 +16,8 @@ type Abuse = { violations: number; started: number; blocked_until: number };
 /** Account keys come only from verified sessions, never client-supplied names, UUIDs or IPs. */
 export class CommunityTraffic {
   private cleanupAt = 0;
+  /** Live buckets; SQL holds only drained ones, so ordinary traffic writes no rows. */
+  private readonly credits = new Map<string, TrafficCredit>();
   constructor(private sql: SqlStorage, private blocked: (accountId: string, retryAt: number) => void) {
     sql.exec(`CREATE TABLE IF NOT EXISTS community_traffic(account_id TEXT NOT NULL,kind TEXT NOT NULL,credits REAL NOT NULL,updated INTEGER NOT NULL,PRIMARY KEY(account_id,kind));
       CREATE INDEX IF NOT EXISTS community_traffic_updated ON community_traffic(updated);
@@ -55,15 +57,21 @@ export class CommunityTraffic {
   }
   private spend(accountId: string, kind: keyof typeof policies, now: number): boolean {
     const [burst, refillMs] = policies[kind];
-    const credit = this.sql.exec<TrafficCredit>("SELECT credits,updated FROM community_traffic WHERE account_id=? AND kind=?", accountId, kind).toArray()[0] ?? { credits: burst, updated: now };
+    const key = `${kind}:${accountId}`;
+    const stored = this.sql.exec<TrafficCredit>("SELECT credits,updated FROM community_traffic WHERE account_id=? AND kind=?", accountId, kind).toArray()[0];
+    const cached = this.credits.get(key);
+    const credit = stored && !(cached && cached.updated >= stored.updated) ? stored : cached ?? { credits: burst, updated: now };
+    this.credits.set(key, credit);
     const ok = takeTrafficCredit(credit, burst, refillMs, now);
-    this.sql.exec(`INSERT INTO community_traffic VALUES(?,?,?,?) ON CONFLICT(account_id,kind) DO UPDATE SET
+    // A restart can restore at most a sixth of a burst; anything drained further survives it.
+    if (credit.credits < burst * 5 / 6) this.sql.exec(`INSERT INTO community_traffic VALUES(?,?,?,?) ON CONFLICT(account_id,kind) DO UPDATE SET
       credits=excluded.credits,updated=excluded.updated`, accountId, kind, credit.credits, credit.updated);
     return ok;
   }
   private cleanup(now: number): void {
     if (now < this.cleanupAt) return;
     this.sql.exec("DELETE FROM community_traffic WHERE updated<?", now - 3_600_000);
+    for (const [key, credit] of this.credits) if (credit.updated < now - 3_600_000) this.credits.delete(key);
     this.sql.exec("DELETE FROM community_traffic_abuse WHERE started<? AND blocked_until<=?", now - 3_600_000, now);
     this.cleanupAt = now + 60_000;
   }

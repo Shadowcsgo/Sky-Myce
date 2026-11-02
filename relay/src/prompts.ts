@@ -410,11 +410,23 @@ export class PromptJobs {
     // Mutation receipts contain prompt/result snapshots; content disappears on the same seven-day clock.
     sql.exec("DELETE FROM prompt_operations WHERE created_at<=?", now - WEEK);
   }
+  /** The next time cleanup() has work, so idle jobs do not poll (every alarm costs storage writes). */
+  private nextCleanup(): number | null {
+    const now = Date.now(), sql = this.storage.sql;
+    let due = (sql.exec<{ at: number | null }>("SELECT MIN(created_at) AS at FROM prompt_operations").one().at ?? Infinity) + WEEK;
+    for (const row of sql.exec<{ data: string }>("SELECT data FROM prompt_jobs").toArray()) {
+      const job: PromptJob = JSON.parse(row.data);
+      if (terminal(job)) due = Math.min(due, job.terminalAt! + WEEK);
+      else if (job.expiresAt > now) due = Math.min(due, job.expiresAt, job.claim && job.status !== "needs_reconciliation" ? job.claim.expiresAt : Infinity);
+    }
+    return Number.isFinite(due) ? due : null;
+  }
   async arm(): Promise<void> {
-    const exists = this.storage.sql.exec("SELECT id FROM prompt_jobs LIMIT 1").toArray().length || this.storage.sql.exec("SELECT id FROM prompt_deliveries LIMIT 1").toArray().length;
-    if (!exists) return;
-    const current = await this.storage.getAlarm();
-    if (current === null || current > Date.now() + 1000) await this.storage.setAlarm(Date.now() + 1000);
+    const delivery = this.storage.sql.exec<{ due: number | null }>("SELECT MIN(MAX(next_at,lease_until)) AS due FROM prompt_deliveries").one().due;
+    const due = Math.min(delivery ?? Infinity, this.nextCleanup() ?? Infinity);
+    if (!Number.isFinite(due)) return;
+    const current = await this.storage.getAlarm(), at = Math.max(Date.now() + 1000, due);
+    if (current === null || current > at) await this.storage.setAlarm(at);
   }
   async alarm(): Promise<void> {
     this.cleanup();
@@ -475,8 +487,7 @@ export class PromptJobs {
         this.storage.sql.exec("UPDATE prompt_deliveries SET attempts=attempts+1,next_at=?,lease_until=0 WHERE id=?", Date.now() + Math.min(300_000, 1000 * 2 ** Math.min(delivery.attempts + 1, 9)), delivery.id);
       }
     }
-    const next = this.storage.sql.exec<{ due: number | null }>("SELECT MIN(MAX(next_at,lease_until)) AS due FROM prompt_deliveries").one().due;
-    if (next !== null || this.storage.sql.exec("SELECT id FROM prompt_jobs LIMIT 1").toArray().length) await this.storage.setAlarm(Math.max(Date.now() + 1000, Math.min(next ?? Infinity, Date.now() + 60_000)));
+    await this.arm();
   }
 }
 

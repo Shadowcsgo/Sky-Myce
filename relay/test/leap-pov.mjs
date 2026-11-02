@@ -245,6 +245,8 @@ try {
     await sql.exec('INSERT INTO community_sessions VALUES(?,?,?,?,?,?,?,?,?,?,NULL,?,NULL,NULL)', person.sessionId, person.accountId, person.uuid, 0,
       createHash('sha256').update(randomBytes(32)).digest('hex'), now + 86400000, createHash('sha256').update(person.token).digest('hex'), now + 300000, now, now, '2.6.18');
   }
+  // A partly drained budget is persisted, so the spend below is visible in SQL (a future time stops refills).
+  await sql.exec("INSERT INTO community_traffic VALUES(?,'request',90,?)", people[0].accountId, Date.now() + 600_000);
   const alice = await connect(people[0]), bob = await connect(people[1]), isolated = await connect(people[2], 'testing');
   const grant = await control(alice, {}); assert.ok(grant.expiresAt - grant.serverTime <= 15_000);
   await control(bob, { epoch: otherEpoch, watching: [aliceId] });
@@ -275,6 +277,6 @@ try {
   const tooLarge = new Promise(resolve => oversized.ws.addEventListener('close', resolve, { once: true }));
   oversized.ws.send(JSON.stringify({ ...pose(1), forged: 'x'.repeat(2100) })); assert.equal((await tooLarge).code, 1009);
   const requestBudget = (await sql.exec("SELECT credits FROM community_traffic WHERE account_id=? AND kind='request'", people[0].accountId))[0];
-  assert.ok(requestBudget.credits < 120, 'POV controls and poses retain the existing account request budget');
+  assert.ok(requestBudget.credits < 90, 'POV controls and poses retain the existing account request budget');
   console.log('Leap POV checks passed: mutual consent, instance isolation, trusted identity, bounded ephemeral poses, revocation races, hibernation and production authentication/traffic.');
 } finally { for (const ws of sockets) try { ws.close(); } catch {} await mf.dispose(); }

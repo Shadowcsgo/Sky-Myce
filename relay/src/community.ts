@@ -294,7 +294,7 @@ export class CommunityAccounts {
     if (this.blacklisted(account.discord_id, input.uuid)) return { ok: false, error: "identity_blacklisted" };
     const traffic = this.traffic.status(account.account_id);
     if (!traffic.ok) return traffic;
-    if (input.connectionId && session.connection_id === input.connectionId && input.heartbeatAt && input.heartbeatAt <= Date.now()) this.sql.exec("UPDATE community_sessions SET last_seen=MAX(last_seen,?) WHERE session_id=?", input.heartbeatAt, session.session_id);
+    if (input.connectionId && session.connection_id === input.connectionId && input.heartbeatAt && input.heartbeatAt <= Date.now()) this.sql.exec("UPDATE community_sessions SET last_seen=? WHERE session_id=? AND last_seen<?", input.heartbeatAt, session.session_id, input.heartbeatAt - 300_000); // Five-minute resolution: every check runs this.
     return { ok: true, accountId: account.account_id, discordId: account.discord_id, uuid: input.uuid, sessionId: session.session_id,
       generation: session.generation, expiresAt: session.access_expires_at, ...(session.connection_id ? { connectionId: session.connection_id } : {}) };
   }

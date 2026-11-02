@@ -19,7 +19,9 @@ export async function checkTraffic(script, proof) {
   const persistent = await build({ stdin: { contents: `import { DurableObject } from 'cloudflare:workers';
     import { CommunityTraffic } from './src/traffic';
     export class BudgetFixture extends DurableObject {
-      run(account,kind,now) { return new CommunityTraffic(this.ctx.storage.sql,()=>{}).consume(account,kind,now); }
+      run(account,kind,now) { this.traffic ??= new CommunityTraffic(this.ctx.storage.sql,()=>{}); return this.traffic.consume(account,kind,now); }
+      fresh(account,kind,now) { return new CommunityTraffic(this.ctx.storage.sql,()=>{}).consume(account,kind,now); }
+      rows() { return this.ctx.storage.sql.exec('SELECT COUNT(*) AS n FROM community_traffic').one().n; }
       global(now) { const traffic=new CommunityTraffic(this.ctx.storage.sql,()=>{}); let accepted=0;
         for(let i=0;i<2200;i++) { if(traffic.consume('actor-'+i,'request',now).ok) accepted++; } return accepted; }
     }
@@ -31,8 +33,10 @@ export async function checkTraffic(script, proof) {
   try {
     const budgets = await budgetRuntime.getDurableObjectNamespace('BUDGET');
     const user = budgets.getByName('user'), at = Date.now();
-    for (let i = 0; i < 120; i++) assert.equal((await user.run('alice', 'request', at)).ok, true);
-    assert.equal((await user.run('alice', 'request', at)).error, 'rate_limited', 'Recreating the governor cannot reset persisted credits');
+    for (let i = 0; i < 19; i++) assert.equal((await user.run('alice', 'request', at)).ok, true);
+    assert.equal(await user.rows(), 0, 'Ordinary traffic writes no storage rows');
+    for (let i = 19; i < 120; i++) assert.equal((await user.run('alice', 'request', at)).ok, true);
+    assert.equal((await user.fresh('alice', 'request', at)).error, 'rate_limited', 'Recreating the governor cannot reset persisted credits');
     assert.equal((await user.run('bob', 'request', at)).ok, true);
     assert.equal((await user.run('alice', 'request', at + 250)).ok, true, 'Credits refill at the configured boundary');
     assert.equal(await budgets.getByName('global').global(at), 2048, 'A persistent global cap bounds accepted work even with many accounts');
@@ -92,7 +96,7 @@ export async function checkTraffic(script, proof) {
     await mf.unsafeEvictDurableObject('traffic-check', 'RelayRoom', { name: 'friends', webSockets: 'hibernate' });
     a.ws.send(JSON.stringify({ type: 'cosmetics_get', id: '2'.repeat(32), uuid: alice.identity.uuid }));
     assert.equal((await a.next()).type, 'cosmetics_result', 'Normal requests survive hibernation');
-    await sql.exec('UPDATE community_traffic SET credits=0,updated=? WHERE account_id=? AND kind=?', Date.now() + 60_000, aliceContext.accountId, 'request');
+    await sql.exec("INSERT OR REPLACE INTO community_traffic VALUES(?,'request',0,?)", aliceContext.accountId, Date.now() + 60_000);
     assert.equal((await store.consumeCommunitySessionRequest(bobContext)).error, 'rate_limited', 'Linked UUIDs and rooms share an account budget');
     await mf.unsafeEvictDurableObject('traffic-check', 'RelayRoom', { name: 'testing', webSockets: 'hibernate' });
     assert.equal((await store.consumeCommunitySessionRequest(aliceContext)).error, 'rate_limited', 'Room hibernation cannot reset the shared quota');
@@ -107,13 +111,15 @@ export async function checkTraffic(script, proof) {
     assert.equal((await sql.exec("SELECT COUNT(*) AS n FROM account_audit WHERE action='traffic_cooldown' AND account_id=?", aliceContext.accountId))[0].n, 1, 'One audit event per cooldown');
     assert.equal((await store.reportCommunityTrafficViolation({ ...carolContext, sessionId: randomUUID(), accountId: aliceContext.accountId })).error, 'session_expired', 'A forged identity cannot suspend another account');
     await sql.exec('UPDATE community_traffic_abuse SET blocked_until=? WHERE account_id=?', Date.now() - 1, aliceContext.accountId);
-    await sql.exec('UPDATE community_traffic SET credits=120,updated=? WHERE account_id=? AND kind=?', Date.now(), aliceContext.accountId, 'request');
+    // Later than the drained bucket's future timestamp, so this stored budget replaces it.
+    await sql.exec('UPDATE community_traffic SET credits=120,updated=? WHERE account_id=? AND kind=?', Date.now() + 120_000, aliceContext.accountId, 'request');
     assert.equal((await store.consumeCommunitySessionRequest(aliceContext)).ok, true, 'Cooldown expires without deleting credentials or user data');
 
     const flood = await socket('Carol', carol);
     for (let i = 0; i < 150; i++) flood.ws.send(JSON.stringify({ type: 'cosmetics_get', id: i.toString(16).padStart(32, '0'), uuid: carol.identity.uuid }));
     assert.equal((await flood.closed).code, 1013, 'Rapid packets are disconnected before unlimited auth lookups');
-    const remaining = (await sql.exec("SELECT credits FROM community_traffic WHERE account_id=? AND kind='request'", carolContext.accountId))[0].credits;
+    // No row means the bucket never drained below its persistence threshold.
+    const remaining = (await sql.exec("SELECT credits FROM community_traffic WHERE account_id=? AND kind='request'", carolContext.accountId))[0]?.credits ?? 120;
     assert.ok(remaining > 30, `The early gate must leave most of the 150 auth checks unexecuted (credits=${remaining})`);
   } finally { for (const ws of sockets) try { ws.close(); } catch {} await mf.dispose(); }
 
