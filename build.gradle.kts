@@ -156,6 +156,8 @@ tasks.processResources {
             "fabric_api_version" to providers.gradleProperty("fabric_api_version").get(),
             "loader_version" to providers.gradleProperty("loader_version").get())
 	}
+	// The Daily Digest's What's New card reads the same changelog the release notes and Discord posts come from.
+	from("CHANGELOG.md") { into("assets/skymyce") }
 }
 
 tasks.withType<JavaCompile>().configureEach {
@@ -333,6 +335,13 @@ val menuCatalogCheck by tasks.registering(JavaExec::class) {
     dependsOn(tasks.testClasses)
     classpath = sourceSets.test.get().runtimeClasspath
     mainClass = "me.mycellium.skymyce.ui.MenuCatalogCheckKt"
+}
+val featureList by tasks.registering(JavaExec::class) {
+    group = "documentation"
+    description = "Writes build/feature-list.md from the menu catalog for the Discord #features channel"
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass = "me.mycellium.skymyce.ui.FeatureListExportKt"
 }
 val menuShortcutsCheck by tasks.registering(JavaExec::class) {
     group = "verification"

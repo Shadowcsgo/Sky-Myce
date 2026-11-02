@@ -392,9 +392,31 @@ object DailyDigest : SkyMyceModule() {
             runCatching { globalCard(now) }.getOrElse { failedCard("global", "Global Status") },
             runCatching { tasksCard() }.getOrElse { failedCard("dailies", "Personal Dailies") },
             runCatching { rngCard() }.getOrElse { failedCard("rng", "RNG Activity") },
+            runCatching { changesCard() }.getOrElse { failedCard("changes", "What's New") },
         )
         nextStateChange = cards.flatMap { it.entries }.mapNotNull { it.until }.filter { it > now }.minOrNull() ?: Long.MAX_VALUE
         snapshot = DigestView(contextLabel, storageStatus, cards, ++revision)
+    }
+
+    /** Read once from the jar: the same CHANGELOG.md the release notes and Discord posts are made from. */
+    private val changelog by lazy {
+        runCatching { DailyDigest::class.java.getResourceAsStream("/assets/skymyce/CHANGELOG.md")?.use { parseChangelog(it.readBytes().decodeToString()) } }
+            .onFailure { SkyMyce.logger.warn("Daily Digest could not read the bundled changelog", it) }.getOrNull().orEmpty()
+    }
+
+    /** The changelog section for the running version, or the newest one if this build has none of its own. */
+    internal fun installedRelease(): ChangelogRelease? =
+        changelog.firstOrNull { it.version == SkyMyce.mod.metadata.version.friendlyString } ?: changelog.firstOrNull()
+
+    private fun changesCard(): DigestCardState {
+        val installed = SkyMyce.mod.metadata.version.friendlyString
+        val current = installedRelease() ?: return DigestCardState("changes", "What's New", "No changelog in this build")
+        val entries = changelog.take(20).map { release ->
+            DigestEntry("changes:${release.version}", "Sky-Myce ${release.version}" + if (release.version == installed) "  ·  installed" else "",
+                release.changes.joinToString("\n") { "• $it" }, tone = if (release.version == installed) DigestTone.POSITIVE else DigestTone.INFO, meta = release.date)
+        }
+        return DigestCardState("changes", "What's New", current.changes.firstOrNull() ?: "Sky-Myce ${current.version}",
+            "Sky-Myce ${current.version} · ${current.changes.size} change${if (current.changes.size == 1) "" else "s"}", DigestTone.SPECIAL, entries)
     }
 
     private fun failedCard(id: String, title: String) = DigestCardState(id, title, "Temporarily unavailable", "Other cards are still available", DigestTone.ATTENTION)
@@ -711,6 +733,26 @@ internal fun parseDigestCommunityHistory(json: com.google.gson.JsonElement?, now
     require(events.size() <= 30)
     return events.mapNotNull { event -> event.takeIf { it.isJsonObject }?.asJsonObject?.let { parseDigestCommunityEvent(it, now) } }
         .distinctBy { it.id }
+}
+
+/** One `## <version> (<date>)` section of CHANGELOG.md: its `- ` lines, newest release first in the file. */
+data class ChangelogRelease(val version: String, val date: String, val changes: List<String>)
+
+private val changelogHeading = Regex("^## (\\S+)(?: \\(([^)]*)\\))?\\s*$")
+
+fun parseChangelog(text: String): List<ChangelogRelease> {
+    val releases = ArrayList<ChangelogRelease>()
+    var version: String? = null; var date = ""; var changes = ArrayList<String>()
+    fun flush() { version?.let { releases += ChangelogRelease(it, date, changes) } }
+    for (raw in text.lineSequence()) {
+        val line = raw.trimEnd()
+        val heading = changelogHeading.matchEntire(line)
+        if (heading != null) { flush(); version = heading.groupValues[1]; date = heading.groupValues[2]; changes = ArrayList() }
+        else if (version != null && line.startsWith("- ")) changes += line.removePrefix("- ").trim()
+        else if (version != null && line.startsWith("  ") && line.isNotBlank() && changes.isNotEmpty()) changes[changes.lastIndex] += " " + line.trim()
+    }
+    flush()
+    return releases
 }
 
 /** Immutable presentation data. The screen only reads these snapshots; providers own all I/O. */

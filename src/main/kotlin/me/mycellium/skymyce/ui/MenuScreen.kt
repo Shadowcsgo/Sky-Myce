@@ -10,6 +10,7 @@ import io.wispforest.owo.ui.core.*
 import me.mycellium.skymyce.config.SettingsScreen
 import me.mycellium.skymyce.config.misc.ThemeConfig
 import me.mycellium.skymyce.features.dev.RuntimeProfiler
+import me.mycellium.skymyce.features.digest.DailyDigest
 import me.mycellium.skymyce.features.digest.DailyDigestScreen
 import me.mycellium.skymyce.features.general.AuctionHouseScreen
 import me.mycellium.skymyce.features.instances.dungeons.friends.DungeonFriendsScreen
@@ -623,6 +624,10 @@ private data class NavigationTitle(val id: String, val width: Int, val size: Dou
                                    val nativeMetrics: Boolean, val lines: List<String>)
 private val titleLines = arrayOfNulls<NavigationTitle>(MenuCategory.entries.size)
 
+/** [text] on one line, cut with an ellipsis to fit [width]. Measure once per width, not per frame. */
+internal fun menuEllipsis(text: String, width: Int, size: Double, bold: Boolean): String =
+    navigationTextLines(text, width.coerceAtLeast(1), size, bold, 1).firstOrNull().orEmpty()
+
 private fun navigationTextLines(text: String, width: Int, size: Double, bold: Boolean, maximumLines: Int): List<String> {
     val component = Component.literal(text).apply { if (bold) withStyle(ChatFormatting.BOLD) }
     val wrapped = menuTextLines(component, width, size).map { line ->
@@ -660,15 +665,15 @@ internal fun menuNavigationDescription(index: Int, width: Int, feature: MenuFeat
 }
 
 /** Space under the category rail for the utility rows: Search, then Quick settings, then Edit HUD when they fit. */
-internal fun menuNavigationFooter(height: Int) = when { height >= 360 -> 100; height >= 320 -> 70; else -> 34 }
+internal fun menuNavigationFooter(height: Int) = when { height >= 360 -> 92; height >= 320 -> 64; else -> 32 }
 
 /** Categories keep their identity and position on Home and every submenu. */
 internal fun menuNavigationRect(layout: MenuLayout, index: Int): MenuRect {
     require(index in menuSectionTitles.indices)
     val footer = menuNavigationFooter(layout.height).toDouble()
-    val step = ((layout.height - 64.0 - footer) / menuSectionTitles.size).coerceIn(1.0, 38.0)
+    val step = ((layout.height - 56.0 - footer) / menuSectionTitles.size).coerceIn(1.0, 30.0)
     val inset = minOf(8.0, layout.sidebar / 5.0)
-    return MenuRect(inset, (64 + index * step).toInt().toDouble(), (layout.sidebar - inset * 2).coerceAtLeast(1.0),
+    return MenuRect(inset, (56 + index * step).toInt().toDouble(), (layout.sidebar - inset * 2).coerceAtLeast(1.0),
         (step - 4).coerceAtLeast(1.0).toInt().toDouble())
 }
 
@@ -774,20 +779,19 @@ internal fun paintMenuHomeTile(canvas: MenuCanvas, rect: MenuRect, title: List<S
     if (MenuTheme.BORDERS || focused) canvas.roundedBorder(rect.x, rect.y, rect.width, rect.height, radius,
         if (focused) style.focusWidth.toDouble() else style.borderWidth,
         MenuTheme.alpha(if (focused) MenuTheme.ACCENT else MenuTheme.BORDER))
-    if (!compact) canvas.fill(rect.x + 10, rect.y + 10, 2.0, (rect.height - 20).coerceAtLeast(1.0), MenuTheme.alpha(MenuTheme.ACCENT, 60))
-    val size = if (compact) 14.0 else 18.0
-    paintMenuIcon(canvas, icon, rect.x + if (compact) 12 else 22, rect.y + if (compact) (rect.height - size) / 2 else 14.0,
+    val size = if (compact) 14.0 else 16.0
+    paintMenuIcon(canvas, icon, rect.x + if (compact) 12 else 11, rect.y + if (compact) (rect.height - size) / 2 else 10.0,
         size, MenuTheme.alpha(if (hover > .1 || focused) MenuTheme.ACCENT else MenuTheme.MUTED))
-    val left = rect.x + if (compact) 36 else 50
-    val titleSize = if (compact) 10.0 else 12.0
-    val top = rect.y + if (compact) (rect.height - title.size * MenuCanvas.lineHeight(titleSize)) / 2 else 12.0
+    val left = rect.x + 36
+    val titleSize = if (compact) 10.0 else 11.0
+    val top = rect.y + if (compact) (rect.height - title.size * MenuCanvas.lineHeight(titleSize)) / 2 else 8.0
     val oldClip = canvas.clip
     val clip = menuNavigationTextClip(rect, canvas.transform)
     canvas.clip = oldClip?.let { intersectMenuClip(it, clip) } ?: clip
     title.forEachIndexed { index, line -> canvas.text(listOf(MenuCanvas.Run(line, MenuTheme.alpha(MenuTheme.TEXT), bold = true)),
         left, top + index * MenuCanvas.lineHeight(titleSize), titleSize) }
     if (!compact) description.forEachIndexed { index, line -> canvas.text(listOf(MenuCanvas.Run(line, MenuTheme.alpha(MenuTheme.MUTED))),
-        left, top + title.size * MenuCanvas.lineHeight(titleSize) + 5 + index * MenuCanvas.lineHeight(9.0), 9.0) }
+        left, top + title.size * MenuCanvas.lineHeight(titleSize) + 2 + index * MenuCanvas.lineHeight(9.0), 9.0) }
     canvas.clip = oldClip
 }
 
@@ -830,6 +834,12 @@ internal fun paintMenuIcon(canvas: MenuCanvas, id: Int, x: Double, y: Double, si
         // A screen with two placed widgets.
         12 -> { line(1.0, 2.0, 15.0, 2.0); line(1.0, 2.0, 1.0, 14.0); line(1.0, 14.0, 15.0, 14.0); line(15.0, 14.0, 15.0, 2.0)
             line(3.5, 5.0, 7.5, 5.0); line(3.5, 5.0, 3.5, 8.0); line(3.5, 8.0, 7.5, 8.0); line(7.5, 8.0, 7.5, 5.0); line(9.5, 11.0, 12.5, 11.0) }
+        // More (three dots), reset (an open circle with an arrowhead), chevron right, and a pin.
+        13 -> for (cx in listOf(3.0, 8.0, 13.0)) canvas.arc(x + cx * unit, y + 8 * unit, 1.5 * unit, 0.0, 360.0, color)
+        // The arc leaves a gap at the upper left (arc angles start 180° from east); the arrowhead closes its lower end.
+        14 -> { canvas.arc(x + 8 * unit, y + 8.5 * unit, 5.5 * unit, 80.0, 380.0, color, 4.2 * unit); line(2.8, 6.6, 2.0, 3.0); line(2.8, 6.6, 6.2, 5.4) }
+        15 -> { line(6.0, 3.0, 11.0, 8.0); line(11.0, 8.0, 6.0, 13.0) }
+        16 -> { line(5.0, 2.0, 11.0, 2.0); line(6.0, 2.0, 6.0, 8.0); line(10.0, 2.0, 10.0, 8.0); line(3.5, 8.5, 12.5, 8.5); line(8.0, 8.5, 8.0, 15.0) }
         11 -> { for (index in 0..2) { val row = 3.0 + index * 5; val knob = when (index) { 0 -> 5.0; 1 -> 11.0; else -> 7.0 }; line(1.0, row, 15.0, row); ring(knob, row, 2.0) } }
         else -> { ring(8.0, 8.0, 4.0); ring(8.0, 8.0, 1.8); for (i in 0..7) { val angle = i * Math.PI / 4; line(8 + kotlin.math.cos(angle) * 5, 8 + kotlin.math.sin(angle) * 5, 8 + kotlin.math.cos(angle) * 7, 8 + kotlin.math.sin(angle) * 7) } }
     }
@@ -859,11 +869,11 @@ internal class MenuNavigation(private val layout: MenuLayout, private val active
                         title, icon, hover, chosen, isFocused)
                 }
             }.apply {
-                sizing(Sizing.fixed((layout.sidebar - 16).coerceAtLeast(1)), Sizing.fixed(24))
+                sizing(Sizing.fixed((layout.sidebar - 16).coerceAtLeast(1)), Sizing.fixed(22))
                 positioning(Positioning.absolute(8, top)); navigation = true; this.selected = selected
                 tooltip(Component.literal(title))
             }
-        child(utility("Home", 0, 30, { home }) { action(null) })
+        child(utility("Home", 0, 28, { home }) { action(null) })
         menuSectionTitles.forEachIndexed { index, title ->
             val rect = geometry.rect(index)
             val revealKey = "navigation/$index"
@@ -887,9 +897,9 @@ internal class MenuNavigation(private val layout: MenuLayout, private val active
                 categoryButtons += this
             })
         }
-        if (layout.height >= 360) child(utility("Edit HUD", 12, layout.height - 94) { editHud() })
-        if (layout.height >= 320) child(utility("Quick settings", 11, layout.height - 64) { quick() })
-        child(utility("Search", 10, (layout.height - 34).coerceAtLeast(0)) { search() })
+        if (layout.height >= 360) child(utility("Edit HUD", 12, layout.height - 86) { editHud() })
+        if (layout.height >= 320) child(utility("Quick settings", 11, layout.height - 59) { quick() })
+        child(utility("Search", 10, (layout.height - 32).coerceAtLeast(0)) { search() })
     }
     override fun draw(g: OwoUIGraphics, mouseX: Int, mouseY: Int, partialTicks: Float, delta: Float) {
         val graphics = g as MenuGraphics
@@ -932,44 +942,40 @@ internal class MenuHomeScreen : MenuScreen(Component.literal("Sky-Myce")) {
     override val home get() = true
     override val menuCategory get() = null
     override fun buildContent(root: FlowLayout) {
-        val padding = MenuTheme.PADDING + 8
-        root.padding(Insets.of(padding)); root.gap(10)
+        val padding = MenuTheme.PADDING + 6
+        root.padding(Insets.of(padding)); root.gap(8)
         root.child(UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply {
             gap(6); verticalAlignment(VerticalAlignment.CENTER)
             child(MenuLabel(Component.literal("Your tools")).apply {
-                fontSize = 19f; color(Color.ofRgb(MenuTheme.TEXT)); horizontalSizing(Sizing.expand())
+                fontSize = 15f; color(Color.ofRgb(MenuTheme.TEXT)); horizontalSizing(Sizing.expand())
             })
             child(MenuButton(Component.literal("Edit")) { navigateMenu(MenuHomeShortcutsScreen()) }.apply {
-                sizing(Sizing.fixed(42), Sizing.fixed(22)); tooltip(Component.literal("Customize the six Home tools"))
+                sizing(Sizing.fixed(42), Sizing.fixed(20)); tooltip(Component.literal("Choose the six Home tools"))
             })
         })
-        root.child(MenuButton(Component.literal("Search features and settings")) { navigateMenu(MenuDirectoryScreen()) }.apply {
-            sizing(Sizing.fill(), Sizing.fixed(26)); tooltip(Component.literal("Every category at once; results show where each item lives"))
+        root.child(MenuButton(Component.literal("Search features, settings, presets and commands")) { navigateMenu(MenuDirectoryScreen()) }.apply {
+            sizing(Sizing.fill(), Sizing.fixed(24)); tooltip(Component.literal("Every category at once; results show where each item lives"))
         })
         val available = (menuWidth - padding * 2).coerceAtLeast(1)
         val list = UIContainers.verticalFlow(Sizing.fill(), Sizing.content()).apply {
-            gap(10); padding(Insets.of(2))
+            gap(8); padding(Insets.of(2))
         }
         val columns = menuHomeColumns(available - 4)
-        val tileWidth = ((available - 4 - (columns - 1) * 8) / columns).coerceAtLeast(1)
+        val tileWidth = ((available - 4 - (columns - 1) * 6) / columns).coerceAtLeast(1)
         val toolColumns = menuHomeToolColumns(available - 4)
-        val toolWidth = ((available - 4 - (toolColumns - 1) * 8) / toolColumns).coerceAtLeast(1)
+        val toolWidth = ((available - 4 - (toolColumns - 1) * 6) / toolColumns).coerceAtLeast(1)
         val tools = MenuShortcuts.homeTools.indices.map { index ->
             val feature = menuHomeFeature(index, MenuShortcuts.homeTools)
-            Triple(feature, menuNavigationTitle(index, toolWidth - 60, 12.0, 2, feature),
-                menuNavigationDescription(index, toolWidth - 60, feature))
+            Triple(feature, menuNavigationTitle(index, toolWidth - 44, 11.0, 1, feature),
+                menuNavigationDescription(index, toolWidth - 44, feature))
         }
-        val toolRows = (tools.size + toolColumns - 1) / toolColumns
-        val minimumHeight = tools.maxOf { (_, title, description) ->
-            29 + title.size * MenuCanvas.lineHeight(12.0) + description.size * MenuCanvas.lineHeight(9.0)
-        }.coerceAtLeast(86)
-        // Header, search, and two shortcut sections (heading + one 36px row) around the tool rows.
-        val fixedHeight = padding * 2 + maxOf(22, MenuCanvas.lineHeight(19.0)) + 10 + 26 + 10 + 4 +
-            2 * (maxOf(20, MenuCanvas.lineHeight(11.0)) + 10 + 36 + 10) + toolRows * 10
-        val toolHeight = maxOf(minimumHeight, (menuHeight - fixedHeight) / toolRows.coerceAtLeast(1))
+        // Tiles are as tall as their text, not stretched to fill the page.
+        val toolHeight = tools.maxOf { (_, title, description) ->
+            16 + title.size * MenuCanvas.lineHeight(11.0) + 2 + description.size * MenuCanvas.lineHeight(9.0)
+        }.coerceAtLeast(40)
         tools.chunked(toolColumns).forEach { row -> list.child(
             UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply {
-                gap(8)
+                gap(6)
                 row.forEach { (feature, title, description) ->
                     child(object : MenuButton(Component.literal(feature.title), { openMenuFeature(feature.id) }) {
                         override fun interactionPose(hover: Double, press: Double) = MotionPose()
@@ -981,36 +987,46 @@ internal class MenuHomeScreen : MenuScreen(Component.literal("Sky-Myce")) {
                     })
                 }
             }) }
-        fun shortcuts(heading: String, view: MenuDirectoryView, ids: List<String>, empty: String) {
+        fun heading(text: String, action: MenuButton?) = list.child(UIContainers.horizontalFlow(Sizing.fill(), Sizing.fixed(maxOf(18, MenuCanvas.lineHeight(10.0)))).apply {
+            gap(6); verticalAlignment(VerticalAlignment.CENTER); margins(Insets.top(4))
+            child(MenuLabel(Component.literal(text)).apply { fontSize = 10f; color(Color.ofRgb(MenuTheme.ACCENT)); horizontalSizing(Sizing.expand()) })
+            action?.let { child(it.apply { sizing(Sizing.fixed(maxOf(34, MenuCanvas.textWidth(it.message.string).toInt() + 16)), Sizing.fixed(18)) }) }
+        })
+        fun shortcuts(title: String, view: MenuDirectoryView, ids: List<String>, empty: String) {
             val items = menuHomeShortcuts(ids, columns)
-            list.child(UIContainers.horizontalFlow(Sizing.fill(), Sizing.fixed(maxOf(20, MenuCanvas.lineHeight(11.0)))).apply {
-                gap(6); verticalAlignment(VerticalAlignment.CENTER)
-                child(MenuLabel(Component.literal(heading)).apply { fontSize = 11f; color(Color.ofRgb(MenuTheme.MUTED)); horizontalSizing(Sizing.expand()) })
-                if (ids.isNotEmpty()) child(MenuButton(Component.literal("All")) { navigateMenu(MenuDirectoryScreen(view = view)) }.apply {
-                    sizing(Sizing.fixed(34), Sizing.fixed(18)); tooltip(Component.literal("Show all ${heading.lowercase()}"))
-                })
+            heading(title, if (ids.isEmpty()) null else MenuButton(Component.literal("All")) { navigateMenu(MenuDirectoryScreen(view = view)) }.apply {
+                tooltip(Component.literal("Show all ${title.lowercase()}"))
             })
             if (items.isEmpty()) {
                 list.child(MenuLabel(Component.literal(empty)).apply { color(Color.ofRgb(MenuTheme.MUTED)); horizontalSizing(Sizing.fill()) })
                 return
             }
             list.child(UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply {
-                gap(8)
+                gap(6)
                 items.forEach { item ->
-                    val title = navigationTextLines(item.title, (tileWidth - 48).coerceAtLeast(1), 10.0, true, 2)
+                    val title = navigationTextLines(item.title, (tileWidth - 48).coerceAtLeast(1), 10.0, true, 1)
                     child(object : MenuButton(Component.literal(item.title), { openMenuHomeShortcut(item.id) }) {
                         override fun interactionPose(hover: Double, press: Double) = MotionPose()
                         override fun paint(graphics: MenuGraphics, delta: Float, hover: Double, chosen: Double, press: Double) =
                             paintMenuHomeTile(graphics.canvas, MenuRect(x.toDouble(), y.toDouble(), width.toDouble(), height.toDouble()),
                                 title, emptyList(), item.iconId, hover, isFocused, compact = true)
                     }.apply {
-                        sizing(Sizing.fixed(tileWidth), Sizing.fixed(36)); tooltip(Component.literal(item.description))
+                        sizing(Sizing.fixed(tileWidth), Sizing.fixed(30)); tooltip(Component.literal(item.description))
                     })
                 }
             })
         }
         shortcuts("Favorites", MenuDirectoryView.FAVORITES, MenuShortcuts.favorites, "Star a feature or setting to keep it here.")
         shortcuts("Recent", MenuDirectoryView.RECENT, MenuShortcuts.recent, "Features you open appear here.")
+        // Contextual information: what changed in the installed version, from the same changelog as the Digest.
+        DailyDigest.installedRelease()?.let { release ->
+            heading("What's new in ${release.version}", MenuButton(Component.literal("All changes")) {
+                navigateMenu(DailyDigestScreen("changes"))
+            }.apply { tooltip(Component.literal("Every recent version's changes in the Daily Digest")) })
+            release.changes.take(3).forEach { change ->
+                list.child(MenuLabel(Component.literal("• $change")).apply { fontSize = 9f; color(Color.ofRgb(MenuTheme.MUTED)); horizontalSizing(Sizing.fill()) })
+            }
+        }
         root.child(menuScroll(Sizing.fill(), Sizing.expand(), list))
     }
 }

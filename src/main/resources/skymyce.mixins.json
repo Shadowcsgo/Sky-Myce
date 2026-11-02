@@ -37,6 +37,7 @@
     "AvatarCosmeticStateMixin",
     "CosmeticNametagMixin",
     "CosmeticFontMixin",
+    "CosmeticChatWrapMixin",
     "CosmeticTooltipMixin",
     "CosmeticEditBoxMixin",
     "MenuEditBoxAccessor",

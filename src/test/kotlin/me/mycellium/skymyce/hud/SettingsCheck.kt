@@ -137,6 +137,25 @@ fun checkSettings() {
     }
     check(rows.count { MenuCatalog.settingTier(it.path) != SettingTier.BASIC } in 30..90) { "Tiering hides too few or too many settings" }
     check(catalog.search("yaw").any { it.settingPath == "Dungeons/Healer Crush Camera/yawOffset" }) { "Search must find Advanced settings" }
+    // Presets name real settings of the right type, set exactly their values, then read as active; nothing is half-applied.
+    val byPath = rows.associateBy { it.path }
+    for (preset in me.mycellium.skymyce.ui.menuPresets) {
+        check(catalog.findFeature(preset.featureId) != null) { "${preset.id} belongs to an unknown feature" }
+        val before = preset.values.keys.associateWith { byPath.getValue(it).entry.get() }
+        check(me.mycellium.skymyce.ui.applyMenuPreset(preset, byPath::get)) { "${preset.id} could not be applied" }
+        check(me.mycellium.skymyce.ui.menuPresetActive(preset, byPath::get)) { "${preset.id} did not read as active after applying" }
+        before.forEach { (path, value) -> byPath.getValue(path).entry.let { if (value is Boolean) it.setBoolean(value) else it.setEnum(value as Enum<*>) } }
+    }
+    val broken = me.mycellium.skymyce.ui.menuPresets[0].let { it.copy(values = it.values + ("Missing/path" to true)) }
+    val graphicsBefore = byPath.getValue("Theme & Appearance/graphicsQuality").entry.get()
+    check(!me.mycellium.skymyce.ui.applyMenuPreset(broken, byPath::get) && byPath.getValue("Theme & Appearance/graphicsQuality").entry.get() == graphicsBefore) {
+        "A preset with a missing setting was partly applied"
+    }
+    check(me.mycellium.skymyce.ui.menuPresetMatches("fps").any { it.id == "performance" })
+    // Command search results draft the command without its placeholders, ready for the player to finish.
+    check(me.mycellium.skymyce.commands.commandHelpDraft(me.mycellium.skymyce.commands.CommandHelp("/sm msg <name> <message>", "", true)) == "/sm msg ")
+    check(me.mycellium.skymyce.commands.commandHelpDraft(me.mycellium.skymyce.commands.CommandHelp("/sm ah", "", true)) == "/sm ah")
+    check(me.mycellium.skymyce.commands.commandHelpMatches("graphics").any { it.command == "/sm graphics" })
     // Reset is offered only for changed values, for scalars and arrays alike.
     for (path in listOf("Dungeons/valuableItemThreshold", "General/autoRefill")) {
         val entry = rows.single { it.path == path }.entry

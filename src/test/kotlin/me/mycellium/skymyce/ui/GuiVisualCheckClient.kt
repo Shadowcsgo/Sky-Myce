@@ -202,6 +202,7 @@ class GuiVisualCheckClient : ClientModInitializer {
             Scene("greenhouse-history", ThemePreset.SIGNATURE) { greenhouseFixture(GreenhouseTab.HISTORY) },
             Scene("greenhouse-wide", ThemePreset.SIGNATURE, 1920, 1080, 1) { greenhouseFixture() },
             Scene("search-light", ThemePreset.LIGHT) { MenuDirectoryScreen() },
+            Scene("search-results", ThemePreset.SIGNATURE) { MenuDirectoryScreen() },
             Scene("leaderboards-community-return", ThemePreset.SIGNATURE) { LeaderboardScreen() },
             Scene("daily-news-normal", ThemePreset.SIGNATURE) { DailyDigestScreen("news") },
             Scene("daily-news-video", ThemePreset.SIGNATURE) {
@@ -291,7 +292,7 @@ class GuiVisualCheckClient : ClientModInitializer {
             check(components.filterIsInstance<MenuButton>().any { it.message.string == (section ?: "All sections") }) {
                 "Breadcrumb opened the wrong section selector: $section"
             }
-            val featureTitles = components.filterIsInstance<MenuLabel>().map { it.text().string }
+            val featureTitles = components.filterIsInstance<MenuLabel>().map { it.text().string } + components.filterIsInstance<MenuListRow>().map { it.message.string }
             check("Dungeon Routing" in featureTitles && (section == null || "Party Finder" !in featureTitles)) {
                 "Section breadcrumb did not filter the category's features"
             }
@@ -582,6 +583,15 @@ class GuiVisualCheckClient : ClientModInitializer {
                     check(images.filterIsInstance<java.awt.image.BufferedImage>().any { image ->
                         image.getRGB(0, 0, image.width, image.height, null, 0, image.width).any { it ushr 24 != 0 }
                     }) { "The actual $id menu icon did not paint texture pixels: loaded=$loaded images=${images.size} textures=$textures bounds=${icon.x()},${icon.y()} ${icon.width()}×${icon.height()}" }
+                }
+            }
+            if (current.name == "search-results" && ticks in listOf(6, 14)) {
+                val components = arrayListOf<UIComponent>().apply { adapter(checkNotNull(client.screen)).rootComponent.collectDescendants(this) }
+                if (ticks == 6) components.filterIsInstance<MenuTextBox>().single().text("graphics")
+                else {
+                    // One query reaches a preset, a feature, its settings and a command, each as a compact row.
+                    val rows = components.filterIsInstance<MenuListRow>().map { it.message.string }
+                    check("Best performance" in rows && "/sm graphics" in rows && rows.any { it.contains("Graphics") }) { "Search missed presets, features or commands: $rows" }
                 }
             }
             if (current.name == "home-flyout" && ticks in listOf(10, 24)) {

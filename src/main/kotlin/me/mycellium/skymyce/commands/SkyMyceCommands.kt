@@ -63,11 +63,23 @@ internal val commandHelp = listOf(
 /** `/sm help` lists everyday commands; a query searches every player-facing one by name, description or keyword. */
 internal fun commandHelpLines(query: String): List<String> {
     val words = query.lowercase().split(' ').filter(String::isNotBlank)
-    val matches = if (words.isEmpty()) commandHelp.filter { it.everyday }
-        else commandHelp.filter { entry -> "${entry.command} ${entry.description} ${entry.keywords}".lowercase().let { text -> words.all(text::contains) } }
+    val matches = if (words.isEmpty()) commandHelp.filter { it.everyday } else commandHelpMatches(query)
     if (matches.isEmpty()) return listOf("§7No command matches \"$query\". Everything is also in the menu: open /sm and search.")
     val header = if (words.isEmpty()) "§bCommands §7(shortcuts; everything is also in the /sm menu). §f/sm help <word>§7 searches all." else "§bCommands matching \"$query\":"
     return listOf(header) + matches.map { "§f${it.command} §7— ${it.description}" }
+}
+
+/** Player-facing commands whose name, description or keywords contain every word of [query]; the menu search uses this too. */
+internal fun commandHelpMatches(query: String): List<CommandHelp> {
+    val words = query.lowercase().split(' ').filter(String::isNotBlank)
+    if (words.isEmpty()) return emptyList()
+    return commandHelp.filter { entry -> "${entry.command} ${entry.description} ${entry.keywords}".lowercase().let { text -> words.all(text::contains) } }
+}
+
+/** What a command search result puts in the chat box: the command without its argument placeholders. */
+internal fun commandHelpDraft(help: CommandHelp): String {
+    val base = help.command.substringBefore(" [").substringBefore(" <")
+    return if (base.length < help.command.length) "$base " else base
 }
 
 internal fun relayChannelCommand(name: String, select: () -> Unit, send: (String) -> Unit) =

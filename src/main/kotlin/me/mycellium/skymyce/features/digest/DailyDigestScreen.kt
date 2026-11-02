@@ -347,10 +347,10 @@ class DailyDigestScreen(private var page: String? = null) : MenuScreen(Component
     private fun navigate(next: String?) { page = next; historyPage = 0; rebuildMenu(if (next == null) -1 else 1) }
     private fun resetList() { historyPage = 0; updateContent(animate = false) }
     private fun rebuild() { rebuildMenu() }
-    private fun pageTitle() = when (page) { "news" -> "DAILY NEWS"; "global" -> "GLOBAL STATUS"; "dailies" -> "PERSONAL DAILIES"; "rng" -> "RNG ACTIVITY"; else -> "DAILY DIGEST" }
+    private fun pageTitle() = when (page) { "news" -> "DAILY NEWS"; "global" -> "GLOBAL STATUS"; "dailies" -> "PERSONAL DAILIES"; "rng" -> "RNG ACTIVITY"; "changes" -> "WHAT'S NEW"; else -> "DAILY DIGEST" }
     private fun footerText(view: DigestView) = digestText(view.status.ifBlank { "Local time • cached first • Tab to navigate • Esc to close" }, 200)
     private fun timestamp(value: Long) = TIME.format(Instant.ofEpochMilli(value).atZone(ZoneId.systemDefault()))
-    private fun icon(id: String) = when (id) { "news" -> "≡"; "global" -> "◈"; "dailies" -> "✓"; else -> "✦" }
+    private fun icon(id: String) = when (id) { "news" -> "≡"; "global" -> "◈"; "dailies" -> "✓"; "changes" -> "↑"; else -> "✦" }
     private fun tone(value: DigestTone) = when (value) {
         DigestTone.POSITIVE -> MenuTheme.GREEN; DigestTone.WAITING -> MenuTheme.YELLOW; DigestTone.ATTENTION -> MenuTheme.RED
         DigestTone.INFO -> accent; DigestTone.SPECIAL -> MenuTheme.PURPLE; DigestTone.MUTED -> MenuTheme.MUTED

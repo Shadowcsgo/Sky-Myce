@@ -138,14 +138,18 @@ fun notifySettingsChanged() {
     DailyDigest.settingsChanged()
     me.mycellium.skymyce.community.CommunitySharing.settingsChanged()
 }
-internal fun settingsRow(): FlowLayout = UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply {
+/** A hairline above each setting row inside its feature panel; theme colours are read when painted. */
+private val SETTING_DIVIDER = Surface { g, c -> g.fill(c.x() + 4, c.y(), c.x() + c.width() - 4, c.y() + 1, MenuTheme.alpha(MenuTheme.BORDER, 55)) }
+
+internal fun settingsRow(): FlowLayout =UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply {
     gap(5); verticalAlignment(VerticalAlignment.CENTER)
 }
 
 internal fun settingsSectionHeader(title: UIComponent, action: UIComponent?, availableWidth: Int): FlowLayout {
     val compact = availableWidth < 240
+    // Sits at the top of its feature's panel, so it has no surface of its own.
     return (if (compact) UIContainers.verticalFlow(Sizing.fill(), Sizing.content()) else settingsRow()).apply {
-        gap(8); padding(Insets.of(10)); surface(MenuTheme.panel(true))
+        gap(8); padding(Insets.of(6, 6, 6, 4))
         child(title.horizontalSizing(if (compact || action == null) Sizing.fill() else Sizing.expand()))
         action?.let { child(it) }
     }
@@ -298,38 +302,47 @@ class SettingsScreen @JvmOverloads constructor(
             val preferences = owner.id == "party-finder" && extraPaths.any { it in setOf("Dungeons/Dungeon Friends/messageTemplate", "Dungeons/Dungeon Friends/titleNotifications") }
             val hud = owner.id == "settings-hud" && (query.isBlank() && category == owner.category && (!featureScoped || featureId == owner.id) || query.isNotBlank() && results.any { it.featureId == owner.id })
             if (settings.isEmpty() && !availability && !preferences && !hud) return@forEach
-            val reset = if (settings.isEmpty()) null else button("Reset section", 88, "Restore defaults for these displayed settings") {
+            val reset = if (settings.isEmpty()) null else button("Reset all", 60, "Restore defaults for these displayed settings") {
                 settings.forEach { it.entry.reset() }
                 if (settings.any { it.path == "openConfigKey" }) SkyMyceCommands.updateSettingsKey()
                 keyCapture = null; edited(); populate()
             }
-            body.child(settingsSectionHeader(column().apply {
-                gap(4)
+            // One panel per feature: its header, then a light divided row per setting (no card per setting).
+            val group = MenuRevealCard("settings/feature/${owner.id}", Sizing.fill(), Sizing.content()).apply {
+                surface(MenuTheme.panel(true)); padding(Insets.of(4, 4, 6, 6)); gap(0)
+            }
+            body.child(group)
+            group.child(settingsSectionHeader(column().apply {
+                gap(2)
                 child(label(owner.title, MenuTheme.TEXT, 12f))
                 child(label(if (query.isBlank()) owner.description else owner.breadcrumb, MenuTheme.MUTED, 9f))
-            }, reset, detailWidth))
+            }, reset, detailWidth - 12))
+            if (query.isBlank()) menuPresets.filter { it.featureId == owner.id }.takeIf { it.isNotEmpty() }?.let { group.child(presetRow(it)) }
             val tiers = settings.groupBy { MenuCatalog.settingTier(it.path) }
             val basic = tiers[SettingTier.BASIC].orEmpty()
-            if (owner.id == "starred-routes") settingGroups(basic, owner.id).forEach { (group, entries) ->
-                body.child(label(group, MenuTheme.MUTED, 10f))
-                entries.forEach { body.child(editor(it)) }
-            } else basic.forEach { setting -> body.child(editor(setting)) }
+            if (owner.id == "starred-routes") settingGroups(basic, owner.id).forEach { (name, entries) ->
+                group.child(label(name, MenuTheme.ACCENT, 9f).apply { margins(Insets.of(6, 2, 6, 6)) })
+                entries.forEach { group.child(editor(it)) }
+            } else basic.forEach { setting -> group.child(editor(setting)) }
             for (tier in listOf(SettingTier.ADVANCED, SettingTier.EXPERT)) {
                 val entries = tiers[tier].orEmpty().ifEmpty { continue }
                 val key = "${owner.id}/$tier"
                 if (entries.any { it.path == pendingSetting }) openTiers += key
                 // Search results are never hidden behind a collapsed section.
-                body.child(MenuCollapsible(Sizing.fill(), Sizing.content(), Component.literal("${tier.title} (${entries.size})"),
+                group.child(MenuCollapsible(Sizing.fill(), Sizing.content(), Component.literal("${tier.title} (${entries.size})"),
                     key in openTiers || query.isNotBlank()).apply {
+                    margins(Insets.top(4))
                     onToggled().subscribe { if (it) openTiers += key else openTiers -= key }
                     entries.forEach { child(editor(it)) }
                 })
             }
-            if (availability && editingDungeonFriend == null) body.child(friendPreferences(true))
-            if (preferences || owner.id == "party-finder" && editingDungeonFriend != null) body.child(friendPreferences(false).also {
+            if (availability && editingDungeonFriend == null) group.child(friendPreferences(true).apply { padding(Insets.of(8, 8, 6, 6)) })
+            if (preferences || owner.id == "party-finder" && editingDungeonFriend != null) group.child(friendPreferences(false).also {
+                it.padding(Insets.of(8, 8, 6, 6))
                 editingDungeonFriend?.let { name -> controls["friend/$name"] = it }
             })
-            if (hud) body.child(button("Open HUD editor", minOf(190, controlWidth), "Arrange widget positions, scale and appearance") { navigateMenu(WidgetEditorScreen(this)) })
+            if (hud) group.child(button("Open HUD editor", minOf(190, controlWidth), "Arrange widget positions, scale and appearance") { navigateMenu(WidgetEditorScreen(this)) }
+                .apply { margins(Insets.of(4, 4, 6, 6)) })
         }
         if (body.children().isEmpty()) body.child(column().apply {
             gap(7); padding(Insets.of(14)); surface(MenuTheme.panel(true))
@@ -349,7 +362,7 @@ class SettingsScreen @JvmOverloads constructor(
             ?: FriendPreferenceDraft(if (availabilityOnly) "Availability" else "Dungeon Friends", friend).also { if (availabilityOnly) availabilityDraft = it else friendDraft = it }
         if (availabilityOnly) {
             child(label("Choose the floor and classes you offer when joining a party.", MenuTheme.MUTED))
-            child(button("Floor: ${draft.floor.name}", detailWidth, "Your available dungeon floor") { anchor ->
+            child(button("Floor: ${draft.floor.name}", controlWidth - 4, "Your available dungeon floor") { anchor ->
                 menu(anchor) { dropdown -> FRIEND_FLOORS.forEach { option ->
                     dropdown.button(MenuTheme.text(Component.literal(option.name))) {
                         draft.floor = option; anchor.message = Component.literal("Floor: ${draft.floor.name}"); it.parent()?.removeChild(it)
@@ -363,7 +376,7 @@ class SettingsScreen @JvmOverloads constructor(
                 options.forEach { clazz -> child(MenuButton(Component.literal(clazz.displayName)) {
                     draft.classes = if (clazz in draft.classes) draft.classes - clazz else draft.classes + clazz
                 }.apply {
-                    selected = { clazz in draft.classes }; sizing(Sizing.fixed(((detailWidth - 5) / 2).coerceAtLeast(1)), Sizing.fixed(24))
+                    selected = { clazz in draft.classes }; sizing(Sizing.fixed(((controlWidth - 9) / 2).coerceAtLeast(1)), Sizing.fixed(24))
                     tip(if (availabilityOnly) "Offer ${clazz.displayName} when joining" else
                         "Include ${clazz.displayName} in $friend's class matching. Level: ${friendStats?.classes?.get(clazz) ?: "Unknown"}")
                 }) }
@@ -428,47 +441,43 @@ class SettingsScreen @JvmOverloads constructor(
         populate(animate)
     }
 
-    private fun toggle(setting: SettingRow) = MenuButton(Component.literal(if (setting.entry.boolean) "On" else "Off")) { b ->
+    private fun toggle(setting: SettingRow) = MenuButton(Component.literal(setting.title)) {
         if (setting.entry.setBoolean(!setting.entry.boolean)) edited()
-        b.message = Component.literal(if (setting.entry.boolean) "On" else "Off")
     }.apply {
-        toggled = { setting.entry.boolean }; sizing(Sizing.fixed(64), Sizing.fixed(22)); tip(setting.tip)
+        toggled = { setting.entry.boolean }; sizing(Sizing.fixed(34), Sizing.fixed(20)); tip(setting.tip)
     }
 
-    private fun editor(setting: SettingRow): FlowLayout = MenuRevealCard("settings/${setting.path}", Sizing.fill(), Sizing.content()).apply {
-        gap(7); padding(Insets.of(10)); surface(MenuTheme.panel(true)); tip(setting.tip)
+    /**
+     * One setting as a compact row: its name and description on the left, the control on the right, then Pin and a
+     * Reset that shows only while the value differs from its default. Narrow pages stack the control under the text.
+     */
+    private fun editor(setting: SettingRow): FlowLayout {
         val entry = setting.entry
-        if (entry.type() == EntryType.BOOLEAN) {
-            child(settingsRow().apply {
-                child(label(setting.title).horizontalSizing(Sizing.expand()))
-                child(toggle(setting))
-            })
-            child(label(setting.tip, MenuTheme.MUTED, 9f))
-            if (setting.path == "Dungeons/Starred Clear Routing/routeThroughMobs") {
-                child(label("Off: route directly toward Blood.", MenuTheme.MUTED, 8f))
-                child(label("Mob markers are separate.", MenuTheme.MUTED, 8f))
-            }
-            child(settingActions(setting))
-            return@apply
+        val wide = detailWidth >= 340
+        val text = UIContainers.verticalFlow(if (wide) Sizing.expand() else Sizing.fill(), Sizing.content()).apply {
+            gap(1)
+            child(label(setting.title, size = 10f))
+            child(label(setting.tip, MenuTheme.MUTED, 8.5f))
+            if (setting.path == "Dungeons/Starred Clear Routing/routeThroughMobs")
+                child(label("Off: route directly toward Blood. Mob markers are separate.", MenuTheme.MUTED, 8f))
         }
-        child(label(setting.title, size = 11f))
-        child(label(setting.tip, MenuTheme.MUTED, 9f))
-        when {
-            entry.isArray -> child(button("Choose options (${entry.array.size} selected)", controlWidth, setting.tip) { anchor ->
+        val control: UIComponent = when {
+            entry.type() == EntryType.BOOLEAN -> toggle(setting)
+            entry.isArray -> button("${entry.array.size} selected", 110, setting.tip) { anchor ->
                 menu(anchor) { dropdown -> entry.objectType().enumConstants?.forEach { option ->
                     dropdown.checkbox(MenuTheme.text(Component.literal(option.toString())), option in entry.array) { selected ->
                         val values = entry.array.toMutableList()
                         if (selected && option !in values) values.add(option) else if (!selected) values.remove(option)
                         if (entry.setArray(values.toTypedArray())) edited()
-                        anchor.message = Component.literal("Choose options (${entry.array.size} selected)")
+                        anchor.message = Component.literal("${entry.array.size} selected")
                     }
                 } }
-            })
-            entry.options().hasOption(Option.KEYBIND) -> child(button(keyName(entry.int), minOf(130, controlWidth), setting.tip) { b ->
+            }
+            entry.options().hasOption(Option.KEYBIND) -> button(keyName(entry.int), 100, setting.tip) { b ->
                 keyCapture?.let { it.second.message = Component.literal(keyName(it.first.entry.int)) }
                 keyCapture = setting to b; b.message = Component.literal("Press a key…")
-            })
-            entry.type() == EntryType.ENUM -> child(button(entry.enum.toString(), minOf(150, controlWidth), setting.tip) { b ->
+            }
+            entry.type() == EntryType.ENUM -> button(entry.enum.toString(), 130, setting.tip) { b ->
                 val values = entry.objectType().enumConstants.filterIsInstance<Enum<*>>()
                 menu(b) { dropdown -> values.forEach { option ->
                     dropdown.button(MenuTheme.text(Component.literal(option.toString()))) {
@@ -476,34 +485,43 @@ class SettingsScreen @JvmOverloads constructor(
                         b.message = Component.literal(entry.enum.toString()); it.parent()?.removeChild(it)
                     }
                 } }
-            })
+            }
             entry.type() == EntryType.STRING -> {
                 val secret = setting.element.id().contains("key", true)
-                child(MenuTextBox(Sizing.fill()).apply {
+                val box = MenuTextBox(Sizing.fixed(if (wide) 150 else controlWidth)).apply {
                     setMaxLength(256); text(if (secret) "" else entry.string)
                     if (secret) setHint(Component.literal(if (entry.string.isBlank()) "No key configured" else "Key saved • enter replacement"))
                     tip(setting.tip)
                     onChanged().subscribe { if ((!secret || it.isNotBlank()) && entry.setString(it)) edited() }
-                })
-                if (secret) child(button("Clear key", minOf(72, controlWidth), "Remove the saved optional API key") { if (entry.setString("")) { edited(); populate() } })
+                }
+                if (!secret) box else settingsRow().apply {
+                    horizontalSizing(Sizing.content())
+                    child(box)
+                    child(button("Clear", 44, "Remove the saved optional API key") { if (entry.setString("")) { edited(); populate() } })
+                }
             }
             else -> {
                 val range = entry.options().getOption(Option.RANGE)
                 if (range != null && entry.options().hasOption(Option.SLIDER)) {
                     val number = (entry.get() as Number).toDouble()
-                    val valueLabel = label(numberText(number))
-                    child(valueLabel)
-                    child(MenuSlider().apply {
-                        value((number - range.min) / (range.max - range.min)); tip(setting.tip)
-                        onChanged().subscribe { amount ->
-                            val n = range.min + amount * (range.max - range.min)
-                            val ok = if (entry.type() == EntryType.INTEGER) entry.setInt(n.roundToInt()) else entry.setDouble(n)
-                            if (ok) { edited(); valueLabel.text(Component.literal(numberText((entry.get() as Number).toDouble()))) }
-                        }
-                    })
+                    val valueLabel = label(numberText(number)).apply { horizontalSizing(Sizing.fixed(30)) }
+                    settingsRow().apply {
+                        horizontalSizing(Sizing.content())
+                        child(MenuSlider().apply {
+                            horizontalSizing(Sizing.fixed(if (wide) 120 else (controlWidth - 36).coerceAtLeast(40)))
+                            value((number - range.min) / (range.max - range.min)); tip(setting.tip)
+                            onChanged().subscribe { amount ->
+                                val n = range.min + amount * (range.max - range.min)
+                                val ok = if (entry.type() == EntryType.INTEGER) entry.setInt(n.roundToInt()) else entry.setDouble(n)
+                                if (ok) { edited(); valueLabel.text(Component.literal(numberText((entry.get() as Number).toDouble()))) }
+                            }
+                        })
+                        child(valueLabel)
+                    }
                 } else {
                     val feedback = label("", MenuTheme.RED, 8f)
-                    child(MenuTextBox(Sizing.fill()).apply {
+                    text.child(feedback)
+                    MenuTextBox(Sizing.fixed(70)).apply {
                         setMaxLength(32); text(entry.get().toString()); tip(setting.tip)
                         onChanged().subscribe { value ->
                             val parsed = settingNumber(entry, value)
@@ -513,31 +531,51 @@ class SettingsScreen @JvmOverloads constructor(
                                 if (accepted) { edited(); feedback.text(Component.empty()) }
                             }
                         }
-                    })
-                    child(feedback)
+                    }
                 }
             }
         }
-        child(settingActions(setting, canPinMenuSetting(setting)))
-    }.also { controls[setting.path] = it }
+        val actions = settingActions(setting, entry.type() == EntryType.BOOLEAN || canPinMenuSetting(setting))
+        return (if (wide) settingsRow() else column().gap(4)).apply {
+            padding(Insets.of(6, 6, 6, 4)); surface(SETTING_DIVIDER); tip(setting.tip)
+            child(text)
+            if (wide) { child(control); child(actions) } else child(settingsRow().apply { child(control); child(actions) })
+        }.also { controls[setting.path] = it }
+    }
 
-    /** Pin (when eligible) and Reset, which is enabled only while the value differs from its default. */
-    private fun settingActions(setting: SettingRow, pin: Boolean = true): FlowLayout = settingsRow().apply {
-        if (pin) child(pinControl(setting))
-        child(button("Reset", 52, "Restore the default for ${setting.title}") {
+    /** Pin (when eligible) and Reset, which only shows while the value differs from its default. */
+    private fun settingActions(setting: SettingRow, pin: Boolean): FlowLayout = settingsRow().apply {
+        gap(1); horizontalSizing(Sizing.content())
+        if (pin) child(MenuIconButton(16, "Pin") {
+            val wasPinned = MenuShortcuts.isPinned(setting.path)
+            onPinSetting(setting.path)
+            if (!wasPinned && !MenuShortcuts.isPinned(setting.path)) showMenuToast("Quick Settings is full (8 controls)", MenuToastKind.INFO)
+        }.apply {
+            sizing(Sizing.fixed(20), Sizing.fixed(20)); selected = { MenuShortcuts.isPinned(setting.path) }
+            tip("Pin to Quick Settings (${catalog.featureForPath(setting.path)?.breadcrumb} → ${setting.title}); click again to unpin")
+        })
+        child(MenuIconButton(14, "Reset") {
             setting.entry.reset()
             if (setting.path == "openConfigKey") SkyMyceCommands.updateSettingsKey()
             keyCapture = null; edited(); populate()
+        }.apply {
+            sizing(Sizing.fixed(20), Sizing.fixed(20)); hiddenWhenInactive = true; tip("Reset ${setting.title} to its default")
         }.also { resetButtons += setting to it; it.active = !settingIsDefault(setting.entry) })
     }
 
-    private fun pinControl(setting: SettingRow) = button(if (MenuShortcuts.isPinned(setting.path)) "Unpin" else "Pin", 58,
-        "${catalog.featureForPath(setting.path)?.breadcrumb} → ${setting.title}. Add or remove this canonical control from Quick Settings.") { anchor ->
-        val wasPinned = MenuShortcuts.isPinned(setting.path)
-        onPinSetting(setting.path)
-        val pinned = MenuShortcuts.isPinned(setting.path)
-        anchor.message = Component.literal(if (pinned) "Unpin" else "Pin")
-        if (!wasPinned && !pinned) showMenuToast("Quick Settings is full (8 controls)", MenuToastKind.INFO)
+    /** The feature's presets as one row of buttons; the one already in place is highlighted. */
+    private fun presetRow(presets: List<MenuPreset>) = settingsRow().apply {
+        padding(Insets.of(2, 6, 6, 6)); surface(SETTING_DIVIDER)
+        child(label("Presets", MenuTheme.MUTED, 9f).horizontalSizing(Sizing.content()))
+        presets.forEach { preset -> child(MenuButton(Component.literal(preset.title)) {
+            if (applyMenuPreset(preset, catalog::setting)) {
+                edited(); SkyMyce.config.save(); notifySettingsChanged()
+                showMenuToast("${preset.title} applied", MenuToastKind.SUCCESS); rebuildMenu()
+            } else showMenuToast("${preset.title} could not be applied", MenuToastKind.ERROR)
+        }.apply {
+            themed(); selected = { menuPresetActive(preset, catalog::setting) }
+            sizing(Sizing.fixed((MenuCanvas.textWidth(preset.title).toInt() + 18).coerceAtMost(controlWidth)), Sizing.fixed(20)); tip(preset.description)
+        }) }
     }
 
     override fun tick() {

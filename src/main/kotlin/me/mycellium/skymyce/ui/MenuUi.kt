@@ -57,7 +57,7 @@ data class MenuLayout(val width: Int, val height: Int, val sidebar: Int) {
         fun fit(width: Int, height: Int): MenuLayout {
             val w = minOf(width - 16, (width * .86).toInt()).coerceIn(1, 1100)
             val h = minOf(height - 16, maxOf(260, (height * .86).toInt())).coerceIn(1, 650)
-            val rail = when { w >= 700 -> 144; w >= 540 -> 132; else -> 52 }
+            val rail = when { w >= 700 -> 128; w >= 540 -> 120; else -> 52 }
             return MenuLayout(w, h, minOf(rail, w / 3).coerceAtLeast(1))
         }
     }
@@ -360,6 +360,57 @@ open class MenuButton(message: Component, action: (ButtonComponent) -> Unit) : B
     // Focus is painted with the button/card, so owo must not add a second rectangle after it.
     override fun drawFocusHighlight(g: OwoUIGraphics, mouseX: Int, mouseY: Int, partialTicks: Float, delta: Float) {}
     override fun shouldDrawTooltip(mouseX: Double, mouseY: Double) = visible && isInBoundingBox(mouseX, mouseY) && !tooltip().isNullOrEmpty()
+}
+
+/**
+ * A compact list row: optional icon, a title and one muted line, cut to fit with an ellipsis. The whole row is the hit
+ * target; there is no card or border, only a hover/focus tint, so long lists stay light.
+ */
+internal open class MenuListRow(private val title: String, private val subtitle: String, private val icon: Int?,
+                                action: (ButtonComponent) -> Unit) : MenuButton(Component.literal(title), action) {
+    var subtitleColor: () -> Int = { MenuTheme.MUTED }
+    private var laidOut = -1
+    private var nativeMetrics = false
+    private var titleLine = ""
+    private var subtitleLine = ""
+    override fun interactionPose(hover: Double, press: Double) = MotionPose()
+    override fun paint(graphics: MenuGraphics, delta: Float, hover: Double, chosen: Double, press: Double) {
+        val canvas = graphics.canvas
+        val emphasis = maxOf(hover, chosen * .6)
+        if (emphasis > 0.0 || press > 0.0) canvas.roundedRect(x.toDouble(), y.toDouble(), width.toDouble(), height.toDouble(), MenuTheme.RADIUS.toDouble(),
+            MenuTheme.alpha(MenuTheme.blend(MenuTheme.CARD, MenuTheme.ACCENT, (emphasis * MenuTheme.style.hoverWeight + press * 9).toInt()), MenuTheme.OPACITY))
+        if (isFocused) MenuTheme.focus(graphics, x, y, width, height)
+        val textLeft = if (icon != null) 26 else 8
+        if (laidOut != width || nativeMetrics != SkijaMenuFonts.active) {
+            laidOut = width; nativeMetrics = SkijaMenuFonts.active
+            titleLine = menuEllipsis(title, width - textLeft - 6, 10.0, true)
+            subtitleLine = if (subtitle.isBlank()) "" else menuEllipsis(subtitle, width - textLeft - 6, 8.5, false)
+        }
+        icon?.let { paintMenuIcon(canvas, it, x + 7.0, y + (height - 13) / 2.0, 13.0, MenuTheme.alpha(if (emphasis > .1 || isFocused) MenuTheme.ACCENT else MenuTheme.MUTED)) }
+        val titleHeight = MenuCanvas.lineHeight(10.0)
+        val total = titleHeight + if (subtitleLine.isEmpty()) 0 else MenuCanvas.lineHeight(8.5)
+        val top = y + (height - total) / 2.0
+        canvas.text(listOf(MenuCanvas.Run(titleLine, MenuTheme.alpha(if (active) MenuTheme.TEXT else MenuTheme.MUTED), bold = true)), x + textLeft.toDouble(), top, 10.0)
+        if (subtitleLine.isNotEmpty()) canvas.text(listOf(MenuCanvas.Run(subtitleLine, MenuTheme.alpha(subtitleColor()))), x + textLeft.toDouble(), top + titleHeight, 8.5)
+    }
+}
+
+/** A small square button drawn as a vector icon, so it never depends on a font having the glyph. */
+internal open class MenuIconButton(private val icon: Int, label: String, action: (ButtonComponent) -> Unit) : MenuButton(Component.literal(label), action) {
+    /** Draw nothing while inactive (a Reset with nothing to reset), instead of a greyed icon. */
+    var hiddenWhenInactive = false
+    override fun interactionPose(hover: Double, press: Double) = MotionPose()
+    override fun shouldDrawTooltip(mouseX: Double, mouseY: Double) = (active || !hiddenWhenInactive) && super.shouldDrawTooltip(mouseX, mouseY)
+    override fun paint(graphics: MenuGraphics, delta: Float, hover: Double, chosen: Double, press: Double) {
+        if (!active && hiddenWhenInactive) return
+        val canvas = graphics.canvas
+        if (hover > 0.0 || press > 0.0) canvas.roundedRect(x.toDouble(), y.toDouble(), width.toDouble(), height.toDouble(), MenuTheme.RADIUS.toDouble(),
+            MenuTheme.alpha(MenuTheme.blend(MenuTheme.CARD, MenuTheme.ACCENT, (hover * MenuTheme.style.hoverWeight + press * 9).toInt()), MenuTheme.OPACITY))
+        if (isFocused) MenuTheme.focus(graphics, x, y, width, height)
+        val size = minOf(12.0, width - 4.0, height - 4.0)
+        val color = if (!active) MenuTheme.alpha(MenuTheme.MUTED, 45) else MenuTheme.alpha(if (hover > .1 || chosen > .5 || isFocused) MenuTheme.ACCENT else MenuTheme.MUTED)
+        paintMenuIcon(canvas, icon, x + (width - size) / 2, y + (height - size) / 2, size, color)
+    }
 }
 
 open class MenuLabel(value: Component) : LabelComponent(MenuTheme.text(value)) {

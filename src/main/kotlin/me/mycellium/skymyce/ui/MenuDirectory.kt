@@ -12,7 +12,11 @@ import io.wispforest.owo.ui.core.*
 import java.util.Locale
 import kotlin.time.Duration.Companion.milliseconds
 import me.mycellium.skymyce.SkyMyce
+import me.mycellium.skymyce.commands.CommandHelp
+import me.mycellium.skymyce.commands.commandHelpDraft
+import me.mycellium.skymyce.commands.commandHelpMatches
 import me.mycellium.skymyce.config.SettingRow
+import net.minecraft.client.gui.screens.ChatScreen
 import me.mycellium.skymyce.config.notifySettingsChanged
 import me.mycellium.skymyce.config.settingRows
 import me.mycellium.skymyce.utils.AtomicJsonFile
@@ -57,9 +61,9 @@ internal class MenuDirectoryScreen(private val category: MenuCategory? = null,
     }
 
     override fun buildContent(root: FlowLayout) {
-        root.padding(Insets.of(14, 14, 18, 18)); root.gap(9)
+        root.padding(Insets.of(12, 12, 18, 18)); root.gap(6)
         root.child(row().apply {
-            heading = label(category?.title ?: view.title, MenuTheme.TEXT, 16f)
+            heading = label(category?.title ?: view.title, MenuTheme.TEXT, 15f)
             if (category == null) heading.verticalSizing(Sizing.fixed(MenuDirectoryView.entries.maxOf {
                 val lines = menuTextLines(Component.literal(it.title), (menuWidth - 36 - 48 - 6).coerceAtLeast(1), heading.fontSize.toDouble()).size
                 lines * heading.lineHeight() + (lines - 1).coerceAtLeast(0) * heading.lineSpacing()
@@ -110,27 +114,31 @@ internal class MenuDirectoryScreen(private val category: MenuCategory? = null,
                     onChanged().subscribe { query = it; limit = 50; populate() }
                 }
                 child(search)
+                // Section and state filters share the search row, so the list starts higher on the page.
+                if (category != null && menuWidth >= 380) child(sectionButton(140))
                 if (category != null) child(button(listOf("All", "Enabled", "Disabled")[filter], 66) { anchor ->
                     openMenuDropdown(anchor) { dropdown -> listOf("All features", "Enabled", "Disabled").forEachIndexed { index, text ->
                         dropdown.button(Component.literal(text)) { filter = index; anchor.message = Component.literal(listOf("All", "Enabled", "Disabled")[filter]); populate() }
                     } }
                 })
             })
-            if (category != null) root.child(button(section ?: "All sections", minOf(150, menuWidth - 36)) { anchor ->
-                openMenuDropdown(anchor) { dropdown ->
-                    (listOf<String?>(null) + catalog.features.filter { it.category == category }.map { it.subcategory }.distinct()).forEach { next ->
-                        dropdown.button(Component.literal(next ?: "All sections")) {
-                            section = next; anchor.message = Component.literal(next ?: "All sections"); limit = 50; populate()
-                        }
-                    }
-                }
-            })
+            if (category != null && menuWidth < 380) root.child(sectionButton(minOf(150, menuWidth - 36)))
         }
         // Keep the gutters outside the header-aligned cards, while the wider viewport clips scrolling.
-        results = column().apply { gap(8); padding(Insets.of(18, 26, 18, 22)) }
+        results = column().apply { gap(6); padding(Insets.of(10, 26, 18, 22)) }
         root.child(menuDirectoryScroll(results))
         populate()
     }
+
+    private fun sectionButton(width: Int) = button(menuEllipsis(section ?: "All sections", width - 16, 10.0, false), width) { anchor ->
+        openMenuDropdown(anchor) { dropdown ->
+            (listOf<String?>(null) + catalog.features.filter { it.category == category }.map { it.subcategory }.distinct()).forEach { next ->
+                dropdown.button(Component.literal(next ?: "All sections")) {
+                    section = next; anchor.message = Component.literal(menuEllipsis(next ?: "All sections", width - 16, 10.0, false)); limit = 50; populate()
+                }
+            }
+        }
+    }.apply { tooltip(Component.literal("Show one section")) }
 
     private fun populate() {
         if (!::results.isInitialized) return
@@ -143,11 +151,11 @@ internal class MenuDirectoryScreen(private val category: MenuCategory? = null,
             else -> {
                 val ids = if (view == MenuDirectoryView.FAVORITES) MenuShortcuts.favorites else MenuShortcuts.recent
                 if (ids.isEmpty()) results.child(label(if (view == MenuDirectoryView.FAVORITES)
-                    "Favorite a feature or setting from a card or search result." else "Opened features appear here.", MenuTheme.MUTED))
-                ids.forEach { id ->
-                    if (id.startsWith("setting:")) catalog.settingEntry(id.removePrefix("setting:"))?.let { results.child(settingCard(it)) }
-                    else catalog.findFeature(id)?.let { results.child(featureCard(it, true)) }
-                }
+                    "Star a feature or setting in its row or a search result." else "Opened features appear here.", MenuTheme.MUTED))
+                if (ids.isNotEmpty()) results.child(group("shortcuts/${view.name}").apply { ids.forEach { id ->
+                    if (id.startsWith("setting:")) catalog.settingEntry(id.removePrefix("setting:"))?.let { child(settingRow(it)) }
+                    else catalog.findFeature(id)?.let { child(featureRow(it, "${it.category.title} › ${it.subcategory}")) }
+                } })
             }
         }
     }
@@ -158,21 +166,23 @@ internal class MenuDirectoryScreen(private val category: MenuCategory? = null,
         else -> true
     }
     private fun showFeatures(features: List<MenuFeature>) {
+        if (category == MenuCategory.SETTINGS && section == null && filter == 0) showPresets(menuPresets)
         if (features.isEmpty()) results.child(label("No features match this filter.", MenuTheme.MUTED))
-        val available = menuDirectoryContentWidth(menuWidth)
+        val available = menuDirectoryContentWidth(menuWidth) - 8
         val columns = menuFeatureColumns(available)
-        val cardWidth = ((available - (columns - 1) * 8) / columns).coerceAtLeast(1)
+        val rowWidth = ((available - (columns - 1) * 6) / columns).coerceAtLeast(1)
         features.groupBy { it.subcategory }.forEach { (section, items) ->
-            results.child(label(section, MenuTheme.ACCENT, 11f))
-            items.chunked(columns).forEach { group -> results.child(row().apply {
-                gap(8); verticalAlignment(VerticalAlignment.TOP)
-                group.forEach { child(featureCard(it, available = cardWidth - 20).horizontalSizing(Sizing.fixed(cardWidth))) }
-            }) }
+            results.child(sectionLabel(section))
+            results.child(group("features/$section").apply {
+                items.chunked(columns).forEach { pair -> child(row().apply {
+                    pair.forEach { child(featureRow(it, it.description).horizontalSizing(Sizing.fixed(rowWidth))) }
+                }) }
+            })
         }
     }
     private fun showSearch() {
         if (category == null && query.isBlank()) {
-            results.child(label("Type to search every category, or choose a category from the icon rail.", MenuTheme.MUTED).horizontalSizing(Sizing.fill()))
+            results.child(label("Type to search every feature, setting, preset and command, or choose a category from the rail.", MenuTheme.MUTED).horizontalSizing(Sizing.fill()))
             results.child(actions(listOf("Dungeon routes", "Chest profit", "Animations").map { example ->
                 button(example, 110) { search.text(example); focusSearch = true }
             }))
@@ -182,57 +192,94 @@ internal class MenuDirectoryScreen(private val category: MenuCategory? = null,
             (category == null || entry.category == category) && (query.isNotBlank() || entry.settingPath == null) &&
                 (category == null || catalog.findFeature(entry.featureId)?.let(::matchesFilter) == true)
         }
-        results.child(label("${entries.size} ${if (query.isBlank()) "features" else "results"}", MenuTheme.MUTED))
-        if (entries.isEmpty()) results.child(label("No matches. Try a feature name, description or alias such as ah, hud or party.", MenuTheme.MUTED).horizontalSizing(Sizing.fill()))
+        val presets = if (category == null) menuPresetMatches(query) else emptyList()
+        val commands = if (category == null) commandHelpMatches(query) else emptyList()
+        val total = entries.size + presets.size + commands.size
+        results.child(label("$total ${if (query.isBlank()) "features" else "results"}", MenuTheme.MUTED))
+        if (total == 0) results.child(label("No matches. Try a feature name, description or alias such as ah, hud or party.", MenuTheme.MUTED).horizontalSizing(Sizing.fill()))
+        if (presets.isNotEmpty()) showPresets(presets)
         entries.take(limit).groupBy { it.category }.forEach { (group, items) ->
-            results.child(label(group.title, MenuTheme.ACCENT, 11f))
-            menuSearchFeatureGroups(catalog, items).forEach { (feature, settings) ->
-                results.child(featureCard(feature, true))
-                settings.forEach { results.child(settingCard(it, indent = 14)) }
-            }
+            results.child(sectionLabel(group.title))
+            results.child(group("search/${group.name}").apply {
+                menuSearchFeatureGroups(catalog, items).forEach { (feature, settings) ->
+                    child(featureRow(feature, if (query.isBlank()) feature.description else "${feature.subcategory}  ·  ${feature.description}"))
+                    settings.forEach { child(settingRow(it, indent = 16)) }
+                }
+            })
         }
         if (entries.size > limit) results.child(button("Show more (${entries.size - limit})", 150) { limit += 50; populate() })
+        if (commands.isNotEmpty()) {
+            results.child(sectionLabel("Commands"))
+            results.child(group("search/commands").apply { commands.forEach { child(commandRow(it)) } })
+        }
     }
 
-    private fun settingCard(entry: MenuSearchEntry, indent: Int = 0) = card("search/${entry.id}").apply {
-        margins(Insets.left(indent))
-        val path = checkNotNull(entry.settingPath)
-        child(row().apply {
-            child(label(entry.title, MenuTheme.TEXT, 11f).horizontalSizing(Sizing.expand()))
-            if (entry.favoriteEligible) child(favoriteButton(entry.id, entry.title))
-        })
-        child(label(entry.breadcrumb, MenuTheme.ACCENT, 9f).horizontalSizing(Sizing.fill()))
-        child(label(entry.description, MenuTheme.MUTED, 9f).horizontalSizing(Sizing.fill()))
-        val controls = mutableListOf(button("Open setting", 94) { openMenuSetting(path) })
-        if (entry.quickSettingEligible && MenuShortcuts.eligible(path)) controls += pinButton(path)
-        child(actions(controls, menuDirectoryContentWidth(menuWidth) - 20 - indent))
+    /** One preset per row; the one already in place is highlighted. Clicking applies it at once. */
+    private fun showPresets(presets: List<MenuPreset>) {
+        results.child(sectionLabel("Presets"))
+        results.child(group("presets").apply { presets.forEach { preset -> child(row().apply {
+            verticalSizing(Sizing.fixed(34))
+            child(MenuListRow(preset.title, preset.description, null) { applyPreset(preset) }.apply {
+                sizing(Sizing.expand(), Sizing.fill()); selected = { menuPresetActive(preset, catalog::setting) }
+                tooltip(Component.literal("${preset.description}\nSets: ${preset.values.keys.joinToString { catalog.setting(it)?.title ?: it }}"))
+            })
+        }) } })
     }
-    private fun favoriteButton(id: String, title: String) = button(if (MenuShortcuts.isFavorite(id)) "★" else "☆", 26) {
+    private fun applyPreset(preset: MenuPreset) {
+        if (!applyMenuPreset(preset, catalog::setting)) { showMenuToast("${preset.title} could not be applied", MenuToastKind.ERROR); return }
+        SkyMyce.config.save(); notifySettingsChanged(); me.mycellium.skymyce.hud.HudTheme.changed()
+        showMenuToast("${preset.title} applied", MenuToastKind.SUCCESS)
+        rebuildMenu()
+    }
+
+    private fun sectionLabel(text: String) = label(text, MenuTheme.ACCENT, 10f).apply { margins(Insets.top(4)) }
+    /** One light panel per section holds its rows, instead of a card per item. */
+    private fun group(key: String) = MenuRevealCard("directory/$key", Sizing.fill(), Sizing.content()).apply {
+        surface(MenuTheme.panel(true)); padding(Insets.of(4)); gap(0)
+    }
+
+    private fun featureRow(feature: MenuFeature, subtitle: String) = row().apply {
+        gap(2); verticalSizing(Sizing.fixed(34))
+        child(MenuListRow(feature.title, subtitle, feature.iconId) { openMenuFeature(feature.id) }.apply {
+            sizing(Sizing.expand(), Sizing.fill())
+            tooltip(Component.literal("${feature.breadcrumb}\n${feature.description}\n${if (feature.tool == null) "Click to configure" else "Click to open"}"))
+        })
+        if (feature.settings.isNotEmpty() && feature.tool != null && feature.tool != "cosmetics")
+            child(MenuIconButton(MenuCategory.SETTINGS.iconId, "Configure ${feature.title}") { openMenuFeature(feature.id, configure = true) }.apply {
+                sizing(Sizing.fixed(22), Sizing.fixed(22)); tooltip(Component.literal("${feature.title} settings (${feature.settings.size})"))
+            })
+        enabledSetting(feature)?.takeUnless { feature.id == "community" }?.let { child(switch(it, "Turn ${feature.title} on or off")) }
+        if (feature.favoriteEligible) child(favoriteButton(feature.id, feature.title))
+    }
+    private fun settingRow(entry: MenuSearchEntry, indent: Int = 0) = row().apply {
+        gap(2); verticalSizing(Sizing.fixed(30)); margins(Insets.left(indent))
+        val path = checkNotNull(entry.settingPath)
+        child(MenuListRow(entry.title, entry.breadcrumb, null) { openMenuSetting(path) }.apply {
+            sizing(Sizing.expand(), Sizing.fill()); tooltip(Component.literal("${entry.description}\nClick to open this setting"))
+        })
+        catalog.setting(path)?.takeIf { it.entry.type() == EntryType.BOOLEAN }?.let { child(switch(it, entry.description)) }
+        if (entry.quickSettingEligible && MenuShortcuts.eligible(path)) child(pinButton(path))
+        if (entry.favoriteEligible) child(favoriteButton(entry.id, entry.title))
+    }
+    private fun commandRow(help: CommandHelp) = row().apply {
+        verticalSizing(Sizing.fixed(30))
+        child(MenuListRow(help.command, help.description, null) { navigateMenu(ChatScreen(commandHelpDraft(help), false)) }.apply {
+            sizing(Sizing.expand(), Sizing.fill()); tooltip(Component.literal("Puts ${commandHelpDraft(help).trim()} in the chat box. Nothing runs until you press Enter."))
+        })
+    }
+    private fun switch(setting: SettingRow, tip: String) = MenuButton(Component.literal(setting.title)) {
+        if (setting.entry.setBoolean(!setting.entry.boolean)) quickChanged(setting.path)
+    }.apply { toggled = { setting.entry.boolean }; sizing(Sizing.fixed(34), Sizing.fixed(20)); tooltip(Component.literal(tip)) }
+    private fun favoriteButton(id: String, title: String) = button(if (MenuShortcuts.isFavorite(id)) "★" else "☆", 22) {
         if (!MenuShortcuts.toggleFavorite(id)) showMenuToast("Favorites is full (32 shortcuts)", MenuToastKind.INFO)
         populate()
-    }.apply { tooltip(Component.literal("Favorite $title")); selected = { MenuShortcuts.isFavorite(id) } }
-
-    private fun featureCard(feature: MenuFeature, breadcrumb: Boolean = false, available: Int = menuDirectoryContentWidth(menuWidth) - 20) = card("feature/${feature.id}").apply {
-        child(row().apply {
-            child(label(feature.title, MenuTheme.TEXT, 12f).horizontalSizing(Sizing.expand()))
-            if (feature.favoriteEligible) child(favoriteButton(feature.id, feature.title))
-        })
-        if (breadcrumb) child(label(feature.breadcrumb, MenuTheme.ACCENT, 9f).horizontalSizing(Sizing.fill()))
-        child(label(feature.description, MenuTheme.MUTED).horizontalSizing(Sizing.fill()))
-        val controls = mutableListOf(button(if (feature.tool == null) "Configure" else "Open", 76) { openMenuFeature(feature.id) })
-        if (feature.settings.isNotEmpty() && feature.tool != null && feature.tool != "cosmetics")
-            controls += button("Configure", 76) { openMenuFeature(feature.id, configure = true) }
-        enabledSetting(feature)?.takeUnless { feature.id == "community" }?.let { setting ->
-            controls += button(if (setting.entry.boolean) "On" else "Off", 64) {
-                if (setting.entry.setBoolean(!setting.entry.boolean)) quickChanged(setting.path)
-                populate()
-            }.apply { toggled = { setting.entry.boolean }; tooltip(Component.literal("Enable ${feature.title}")) }
-        }
-        child(actions(controls, available))
-        child(row().apply {
-            featureEnabled(feature)?.takeUnless { feature.id == "community" }?.let { child(label(if (it) "Enabled" else "Disabled", if (it) MenuTheme.ACCENT else MenuTheme.MUTED)) }
-            if (feature.settings.isNotEmpty()) child(label("${feature.settings.size} options", MenuTheme.MUTED, 9f))
-        })
+    }.apply { background = false; tooltip(Component.literal("Favorite $title")); selected = { MenuShortcuts.isFavorite(id) } }
+    private fun pinButton(path: String) = MenuIconButton(16, "Pin") {
+        if (!MenuShortcuts.togglePin(path)) showMenuToast("Quick Settings is full (8 controls)", MenuToastKind.INFO)
+        populate()
+    }.apply {
+        sizing(Sizing.fixed(22), Sizing.fixed(22)); selected = { MenuShortcuts.isPinned(path) }
+        tooltip(Component.literal(if (MenuShortcuts.isPinned(path)) "Unpin from Quick Settings" else "Pin to Quick Settings"))
     }
 
     private fun showQuick() {
@@ -286,11 +333,6 @@ internal class MenuDirectoryScreen(private val category: MenuCategory? = null,
         SkyMyce.config.save(); notifySettingsChanged()
         if (path == "Theme & Appearance/preset") { me.mycellium.skymyce.hud.HudTheme.changed(); rebuildMenu() }
     }
-    private fun pinButton(path: String) = button(if (MenuShortcuts.isPinned(path)) "Unpin" else "Pin", 54) {
-        if (!MenuShortcuts.togglePin(path)) showMenuToast("Quick Settings is full (8 controls)", MenuToastKind.INFO)
-        populate()
-    }
-
     override fun tick() {
         super.tick()
         if (menuClosing) return

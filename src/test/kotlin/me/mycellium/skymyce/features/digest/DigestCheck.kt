@@ -59,6 +59,7 @@ fun checkDigestLifecycleAndNews() {
     check(NewsSource.entries == listOf(NewsSource.GAME, NewsSource.DERAILIOUS))
     checkDigestVideos()
     checkDigestLinks()
+    checkChangelog()
     val legacyNewsConfig = JsonParser.parseString("""{"General":{"Daily Digest":{"news":true,"gameUpdates":false,"alphaUpdates":true,"retainedRngEvents":100}},"unrelated":{"value":7}}""").asJsonObject
     check(!me.mycellium.skymyce.config.misc.migrateDailyNewsConfig(legacyNewsConfig, true))
     val migratedNewsConfig = legacyNewsConfig.getAsJsonObject("General").getAsJsonObject("Daily Digest")
@@ -280,6 +281,16 @@ fun checkDigestLifecycleAndNews() {
         Files.walk(directory).use { files -> files.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
     }
     println("Daily Digest checks passed: local day, delayed consent, profile isolation, asynchronous cache, corruption recovery and bounded history")
+}
+
+private fun checkChangelog() {
+    val parsed = parseChangelog("# Title\nIntro line\n\n## 1.0.0-beta-002 (2026-11-02)\n- First change\n  continued\n- Second\n\n## 1.0.0-beta-001\n- Old\n")
+    check(parsed == listOf(ChangelogRelease("1.0.0-beta-002", "2026-11-02", listOf("First change continued", "Second")),
+        ChangelogRelease("1.0.0-beta-001", "", listOf("Old")))) { parsed.toString() }
+    // The bundled file (where the mod reads it) must parse: every section has a version, a date and at least one change.
+    val shipped = parseChangelog(checkNotNull(DailyDigest::class.java.getResourceAsStream("/assets/skymyce/CHANGELOG.md")) { "CHANGELOG.md is not bundled" }
+        .use { it.readBytes().decodeToString() })
+    check(shipped.isNotEmpty() && shipped.all { it.version.matches(Regex("\\d+\\.\\d+\\.\\d+(-beta-\\d+)?")) && it.date.isNotEmpty() && it.changes.isNotEmpty() }) { shipped.toString() }
 }
 
 private fun checkDigestVideos() {

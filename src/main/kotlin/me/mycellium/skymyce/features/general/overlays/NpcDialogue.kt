@@ -5,6 +5,7 @@ import me.mycellium.skymyce.SkyMyce
 import me.mycellium.skymyce.SkyMyceModule
 import me.mycellium.skymyce.config.misc.NpcDialogueConfig as Settings
 import me.mycellium.skymyce.config.misc.ThemeConfig
+import me.mycellium.skymyce.features.social.CosmeticNames
 import me.mycellium.skymyce.hud.HudTheme
 import me.mycellium.skymyce.ui.GuiMotion
 import me.mycellium.skymyce.utils.MC
@@ -22,6 +23,7 @@ import net.minecraft.network.chat.Style
 import net.minecraft.network.protocol.common.ServerboundCustomClickActionPacket
 import net.minecraft.resources.Identifier
 import net.minecraft.world.entity.LivingEntity
+import net.minecraft.util.FormattedCharSequence
 import net.minecraft.world.entity.decoration.ArmorStand
 import org.lwjgl.glfw.GLFW
 import tech.thatgravyboat.skyblockapi.api.events.base.Subscription
@@ -97,7 +99,8 @@ object NpcDialogue : SkyMyceModule() {
     private var keysDown = BooleanArray(9)
     private var wrappedMessage: String? = null
     private var wrappedWidth = 0
-    private var wrapped: List<String> = emptyList()
+    private var wrapped: List<FormattedCharSequence> = emptyList()
+    private var wrappedLengths = IntArray(0)
 
     private fun active() = isEnabled() && Settings.enabled && LocationAPI.isOnSkyBlock
 
@@ -204,16 +207,24 @@ object NpcDialogue : SkyMyceModule() {
         draw(graphics, 8, graphics.guiHeight() / 2, centred = false, maxWidth = room)
     }
 
-    /** [message] wrapped to [width] as plain lines, kept until either changes rather than re-split every frame. */
-    private fun wrappedLines(font: Font, message: String, width: Int): List<String> {
+    /**
+     * [message] wrapped to [width], kept until either changes rather than re-split every frame. Lines stay styled
+     * sequences: Font.split already shows cosmetic names, and flattening them to strings would replace a name twice.
+     */
+    private fun wrappedLines(font: Font, message: String, width: Int): List<FormattedCharSequence> {
         if (message != wrappedMessage || width != wrappedWidth) {
-            wrapped = font.split(Component.literal(message), width).map { seq ->
-                StringBuilder().also { raw -> seq.accept { _, _, cp -> raw.appendCodePoint(cp); true } }.toString()
-            }
+            wrapped = font.split(Component.literal(message), width)
+            wrappedLengths = IntArray(wrapped.size) { i -> var n = 0; wrapped[i].accept { _, _, _ -> n++; true }; n }
             wrappedMessage = message; wrappedWidth = width
         }
         return wrapped
     }
+
+    /** The first [count] characters of [line], still marked as already displayed. */
+    private fun typed(line: FormattedCharSequence, count: Int): FormattedCharSequence = CosmeticNames.original(FormattedCharSequence { sink ->
+        var n = 0
+        line.accept { index, style, code -> n++ < count && sink.accept(index, style, code) }
+    })
 
     /** The box: name tab, optional portrait, the typed line, and the numbered options above it. */
     private fun draw(graphics: GuiGraphicsExtractor, anchorX: Int, anchorY: Int, centred: Boolean, maxWidth: Int) {
@@ -230,9 +241,9 @@ object NpcDialogue : SkyMyceModule() {
         val width = maxWidth.coerceIn(180, 340)
         val textLeftPad = if (hasPortrait) 58 else 10
         val wrap = width - textLeftPad - 10
-        val message = line?.message.orEmpty()
-        val revealed = if (animate && line != null) revealedChars(message.length, now - shownAt, until - shownAt) else message.length
-        val lines = if (line != null) wrappedLines(font, message, wrap) else emptyList()
+        val lines = if (line != null) wrappedLines(font, line.message, wrap) else emptyList()
+        val total = wrappedLengths.sum() + lines.size
+        val revealed = if (animate && line != null) revealedChars(total, now - shownAt, until - shownAt) else total
         val height = (lines.size * 10 + 18).coerceAtLeast(if (hasPortrait) 52 else 30)
         val left = if (centred) anchorX - width / 2 else anchorX
         val top = (if (centred) anchorY - height else anchorY - height / 2) + ((1 - eased) * 6).roundToInt()
@@ -243,10 +254,11 @@ object NpcDialogue : SkyMyceModule() {
             graphics.fill(left, top, left + width, top + 1, a(accent, 0.9))
             // Typed text: whole lines until the reveal point, then the partial line.
             var remaining = revealed
-            lines.forEachIndexed { i, raw ->
-                val shown = raw.take(remaining.coerceAtLeast(0))
-                remaining -= raw.length + 1
-                if (shown.isNotEmpty()) graphics.text(font, shown, left + textLeftPad, top + 12 + i * 10, a(text, 1.0), true)
+            lines.forEachIndexed { i, seq ->
+                val length = wrappedLengths[i]
+                val shown = remaining.coerceIn(0, length)
+                remaining -= length + 1
+                if (shown > 0) graphics.text(font, if (shown == length) seq else typed(seq, shown), left + textLeftPad, top + 12 + i * 10, a(text, 1.0), true)
             }
             // Name tab over the top edge.
             val nameWidth = font.width(line.name) + 10
