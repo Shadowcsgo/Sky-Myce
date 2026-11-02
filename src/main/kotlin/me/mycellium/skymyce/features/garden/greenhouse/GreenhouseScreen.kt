@@ -14,10 +14,39 @@ import me.mycellium.skymyce.utils.MC
 import net.minecraft.client.gui.screens.inventory.tooltip.ClientTooltipComponent
 import net.minecraft.network.chat.Component
 
-/** Every Greenhouse plot at a glance: its layout, what the last scan saw, growth timers and estimated and harvested profit. */
-class GreenhouseScreen : MenuScreen(Component.literal("Greenhouses"), MenuPage.GREENHOUSE) {
+internal enum class GreenhouseTab(val title: String) {
+    OVERVIEW("Overview"), MUTATIONS("Mutations"), SHOPPING("Shopping"), UNLOCK("Unlock guide"), HISTORY("History")
+}
+
+internal enum class MutationSort(val title: String) { PROFIT("Profit/h"), NAME("Name"), CYCLE("Growth time") }
+
+/** Mutation browser rows: search by name or ingredient, then sort. Pure so it can be checked without a client. */
+internal fun greenhouseMutationRows(rows: List<GreenhousePlanner.PlotRanked>, catalog: PlantCatalog, query: String, sort: MutationSort): List<GreenhousePlanner.PlotRanked> {
+    val words = query.lowercase().split(' ').filter(String::isNotBlank)
+    val matching = rows.filter { row ->
+        val text = (listOf(row.entry.plant.name) + row.entry.plant.requires.keys.map { catalog[it]?.name ?: it }).joinToString(" ").lowercase()
+        words.all(text::contains)
+    }
+    return when (sort) {
+        MutationSort.PROFIT -> matching.sortedByDescending { it.plotPerHour ?: it.entry.profitPerHour }
+        MutationSort.NAME -> matching.sortedBy { it.entry.plant.name }
+        MutationSort.CYCLE -> matching.sortedBy { it.entry.cycleHours }
+    }
+}
+
+/**
+ * The Greenhouse workspace: plots (layout, scan, growth, profit), a mutation browser, the shopping list, the unlock guide
+ * and harvest history. Every action calls the same planner functions as `/sm greenhouse`.
+ */
+class GreenhouseScreen internal constructor(private var tab: GreenhouseTab) : MenuScreen(Component.literal("Greenhouses"), MenuPage.GREENHOUSE) {
+    constructor() : this(GreenhouseTab.OVERVIEW)
     private lateinit var results: ScrollContainer<FlowLayout>
+    private lateinit var controls: FlowLayout
     private var rendered: List<Any?> = emptyList()
+    private var query = ""
+    private var sort = MutationSort.PROFIT
+    private var expanded: String? = null
+    private var rankingPlot: String? = null
     private val panelWidth get() = menuWidth
     private val compact get() = panelWidth < 600
 
@@ -30,20 +59,49 @@ class GreenhouseScreen : MenuScreen(Component.literal("Greenhouses"), MenuPage.G
                 gap(8)
                 child(UIContainers.verticalFlow(Sizing.fixed(3), Sizing.fixed(18)).surface(MenuTheme.tintedPanel { MenuTheme.ACCENT }))
                 child(label("§lGreenhouses").horizontalSizing(Sizing.expand()))
-                child(button("Ranking", 64) { chat(GreenhousePlanner::showRanking) }.tooltip(Component.literal("Profit per plot for each mutation, in chat")))
-                child(button("Help", 44) { chat(GreenhousePlanner::showHelp) }.tooltip(Component.literal("Every /sm greenhouse command, in chat")))
                 child(button(remindersLabel(), 92) { it.message = Component.literal(remindersLabel(GreenhousePlanner.toggleReminders())) }
                     .tooltip(Component.literal("Greenhouse reminders: shown in game while you play, DMed on Discord otherwise")))
                 // Opened with this screen as its parent, so Done and Esc come back here.
                 child(button("Settings", 64) { navigateMenu(SettingsScreen.forFeature(this@GreenhouseScreen, "greenhouse-planner")) })
             })
+            child(row().apply {
+                gap(4)
+                GreenhouseTab.entries.forEach { option ->
+                    child(button(option.title, if (compact) 70 else 92) { if (tab != option) { tab = option; buildControls(); update() } }
+                        .apply { navigation = true; centeredNavigation = true; selected = { tab == option } })
+                }
+            })
+            controls = row().apply { gap(4) }
+            child(controls)
             results = menuScroll(Sizing.fill(), Sizing.expand(), UIContainers.verticalFlow(Sizing.fill(), Sizing.content())).apply {
                 scrollbar(ScrollContainer.Scrollbar.flat(Color.ofRgb(MenuTheme.ACCENT))); scrollbarThiccness(2); padding(Insets.right(4))
             }
             child(results)
         })
+        buildControls()
         update()
     }
+
+    /** Tab-specific controls sit outside the results, so typing a search never rebuilds the field. */
+    private fun buildControls() {
+        controls.clearChildren()
+        if (tab != GreenhouseTab.MUTATIONS) return
+        controls.child(MenuTextBox(Sizing.expand()).apply {
+            setMaxLength(40); text(query); setHint(Component.literal("Search mutation or ingredient..."))
+            onChanged().subscribe { query = it; update() }
+        })
+        controls.child(button("Sort: ${sort.title}", 110) {
+            sort = MutationSort.entries[(sort.ordinal + 1) % MutationSort.entries.size]
+            it.message = Component.literal("Sort: ${sort.title}"); update()
+        }.tooltip(Component.literal("Profit per hour (estimated), name or growth time")))
+        val plots = GreenhousePlanner.plots
+        if (plots.size > 1) controls.child(button("Plot: ${rankingPlot().name}", 90) {
+            rankingPlot = plots[(plots.indexOf(rankingPlot()) + 1) % plots.size].name
+            it.message = Component.literal("Plot: ${rankingPlot().name}"); update()
+        }.tooltip(Component.literal("Rank and plan for this plot (its locked cells and upgrades)")))
+    }
+
+    private fun rankingPlot() = GreenhousePlanner.plots.firstOrNull { it.name == rankingPlot } ?: GreenhousePlanner.selected()
 
     override fun tick() {
         super.tick()
@@ -59,11 +117,157 @@ class GreenhouseScreen : MenuScreen(Component.literal("Greenhouses"), MenuPage.G
         val plots = GreenhousePlanner.plots.toList()
         results.child(UIContainers.verticalFlow(Sizing.fill(), Sizing.content()).apply {
             gap(6)
-            child(overview(plots, now))
-            if (plots.isEmpty()) child(label("No Greenhouse plots yet. In your Garden, look at a plot's corner soil and run /sm greenhouse anchor.", MUTED)
-                .horizontalSizing(Sizing.fill()).margins(Insets.of(8)))
-            plots.forEach { child(plotCard(it, now)) }
+            when (tab) {
+                GreenhouseTab.OVERVIEW -> {
+                    child(overview(plots, now))
+                    if (plots.isEmpty()) child(note("No Greenhouse plots yet. In your Garden, look at a plot's corner soil and run /sm greenhouse anchor."))
+                    plots.forEach { child(plotCard(it, now)) }
+                }
+                GreenhouseTab.MUTATIONS -> mutations(this)
+                GreenhouseTab.SHOPPING -> shopping(this, plots, now)
+                GreenhouseTab.UNLOCK -> unlock(this, now)
+                GreenhouseTab.HISTORY -> history(this, now)
+            }
         })
+    }
+
+    private fun note(text: String) = label(text, MUTED).horizontalSizing(Sizing.fill()).margins(Insets.of(8))
+
+    /** Profit-ranked mutations for one plot; details show requirements and plan it there. */
+    private fun mutations(list: FlowLayout) {
+        val catalog = GreenhousePlanner.catalog ?: return run { list.child(note("Greenhouse data is unavailable.")) }
+        val plot = rankingPlot()
+        val rows = greenhouseMutationRows(GreenhousePlanner.plotRanking(plot), catalog, query, sort)
+        list.child(label("Estimated profit for plot ${plot.name} at current Bazaar prices (skymutations.eu formula). Locked cells, upgrades and Garden level apply.", MUTED)
+            .apply { fontSize = 8f; horizontalSizing(Sizing.fill()) })
+        if (rows.isEmpty()) list.child(note(if (query.isBlank()) "No mutation has Bazaar prices yet; prices load after a moment in SkyBlock." else "No mutation matches \"$query\"."))
+        rows.forEach { row ->
+            val plant = row.entry.plant
+            val analysed = !plant.mutation || GreenhousePlanner.isAnalyzed(plant.id)
+            list.child(card(if (analysed) MenuTheme.ACCENT else MUTED).apply {
+                child(row().apply {
+                    gap(6)
+                    child(label("§l${plant.name}").horizontalSizing(Sizing.expand()))
+                    if (!analysed) child(GreenhouseBadge("Not analysed", MUTED))
+                    val perHour = row.plotPerHour ?: row.entry.profitPerHour
+                    child(label("${GreenhousePlanner.signed(perHour)}/h est.", if (perHour >= 0) GREEN else MenuTheme.RED))
+                    child(label("${"%.1f".format(row.entry.cycleHours)}h", MUTED).tooltip(Component.literal("Growth cycle (estimated)")))
+                    row.count?.let { child(label("×$it", MUTED).tooltip(Component.literal("Targets that fit this plot (quick solve)"))) }
+                    child(button(if (expanded == plant.id) "Hide" else "Details", 56) { expanded = if (expanded == plant.id) null else plant.id; update() })
+                    child(button("Plan", 48) { GreenhousePlanner.planFor(plot, plant.id); showMenuToast("Planning ${plant.name} on plot ${plot.name}…", MenuToastKind.INFO) }
+                        .tooltip(Component.literal("Solve a layout for ${plant.name} on plot ${plot.name}; it replaces the current plan")))
+                })
+                if (expanded == plant.id) {
+                    child(label("Needs: " + plant.requires.entries.joinToString(", ") { (id, n) -> "$n× ${catalog[id]?.name ?: id}" }, TEXT)
+                        .apply { horizontalSizing(Sizing.fill()) })
+                    child(label("Soil: ${plant.soils.joinToString(", ") { GreenhousePlanner.soilName(it) }} · ${plant.stages} stages · " +
+                        "revenue ${GreenhousePlanner.signed(row.entry.revenue)}, inputs ${GreenhousePlanner.signed(-row.entry.inputCost)} per cycle", MUTED)
+                        .apply { fontSize = 8f; horizontalSizing(Sizing.fill()) })
+                    if (!analysed) child(label("Unlock it: grow it once, then analyse it with the Plant Diagnostics Tool. The Unlock guide tab tracks this.", MUTED)
+                        .apply { fontSize = 8f; horizontalSizing(Sizing.fill()) })
+                }
+            })
+        }
+    }
+
+    /** Per plot, what is missing and where it comes from. Get sends the one /gfs or /bz command, as the chat list does. */
+    private fun shopping(list: FlowLayout, plots: List<GreenhousePlanner.Plot>, now: Long) {
+        list.child(label("Purchases stay manual: Get takes items from your sacks (/gfs) or opens the Bazaar with the amount ready.", MUTED)
+            .apply { fontSize = 8f; horizontalSizing(Sizing.fill()) })
+        if (plots.isEmpty()) list.child(note("No plots yet."))
+        plots.forEach { plot ->
+            val items = GreenhousePlanner.shoppingList(plot)
+            list.child(card(if (items.isEmpty()) GREEN else MenuTheme.YELLOW).apply {
+                child(row().apply {
+                    gap(6)
+                    child(label("§lPlot ${plot.name}").horizontalSizing(Sizing.expand()))
+                    child(label(when {
+                        plot.layout == null -> "No layout yet"
+                        plot.scannedAt == 0L -> "Not checked: stand near the plot"
+                        else -> "Checked ${GreenhousePlanner.age(now - plot.scannedAt)} ago"
+                    }, MUTED).apply { fontSize = 8f })
+                })
+                if (plot.layout != null && plot.scannedAt > 0 && items.isEmpty()) child(label("Everything is planted.", GREEN))
+                items.groupBy { it.source }.forEach { (source, group) ->
+                    child(label(source.title, MUTED).apply { fontSize = 9f })
+                    group.forEach { item ->
+                        child(row().apply {
+                            gap(6)
+                            child(label(if (item.from != null) "${item.count}× ${item.name} §7(${item.fetch} ${item.from})" else "${item.count}× ${item.name}")
+                                .horizontalSizing(Sizing.expand()))
+                            child(button("Get", 40) { chat { GreenhousePlanner.get(plot.name, item.key) } }.tooltip(Component.literal(
+                                if (source == ShoppingSource.BAZAAR) "Open ${item.name} in the Bazaar; ${item.count} goes into the amount sign"
+                                else "Take ${item.fetch} ${item.from ?: item.name} from your sacks (/gfs)")))
+                        })
+                    }
+                }
+            })
+        }
+    }
+
+    /** Which mutations are analysed, how fresh that is, and the manual steps the game still needs. */
+    private fun unlock(list: FlowLayout, now: Long) {
+        val catalog = GreenhousePlanner.catalog ?: return run { list.child(note("Greenhouse data is unavailable.")) }
+        val mutations = catalog.plants.filter { it.mutation }
+        val done = mutations.count { GreenhousePlanner.isAnalyzed(it.id) }
+        list.child(card(MenuTheme.ACCENT).apply {
+            child(row().apply {
+                gap(6)
+                child(label("§l$done of ${mutations.size} mutations analysed").horizontalSizing(Sizing.expand()))
+                child(button("Start guide", 84) { chat(GreenhousePlanner::unlockGuide) }
+                    .tooltip(Component.literal("Plans plots to grow what is still locked and walks you through it in chat")))
+            })
+            val read = GreenhousePlanner.mutationStatusReadAt
+            child(label(if (read > 0) "Status read from the Carpenter's All Mutations menu ${GreenhousePlanner.age(now - read)} ago."
+                else "Status not read yet: open the Carpenter's All Mutations menu once so analysed mutations are known.", if (read > 0) MUTED else MenuTheme.YELLOW)
+                .apply { fontSize = 8f; horizontalSizing(Sizing.fill()) })
+            child(label("Manual steps: grow the mutation, then analyse it with the Plant Diagnostics Tool. The game confirms it in chat and the status updates here.", MUTED)
+                .apply { fontSize = 8f; horizontalSizing(Sizing.fill()) })
+        })
+        mutations.sortedWith(compareBy({ GreenhousePlanner.isAnalyzed(it.id) }, { it.name })).forEach { plant ->
+            val analysed = GreenhousePlanner.isAnalyzed(plant.id)
+            list.child(row().apply {
+                gap(6); padding(Insets.horizontal(6))
+                child(label(if (analysed) "§a✔ §f${plant.name}" else plant.name).horizontalSizing(Sizing.expand()))
+                child(label(plant.requires.entries.joinToString(", ") { (id, n) -> "$n× ${catalog[id]?.name ?: id}" }.ifEmpty { plant.special ?: "" }, MUTED)
+                    .apply { fontSize = 8f; horizontalSizing(Sizing.fill(45)) })
+                if (!analysed) child(button("Mark analysed", 96) { GreenhousePlanner.markAnalyzed(plant.id) }
+                    .tooltip(Component.literal("Only if the game already shows ${plant.name} as analysed")))
+            })
+        }
+    }
+
+    /** Recorded harvests only, valued at the price when harvested. */
+    private fun history(list: FlowLayout, now: Long) {
+        val harvests = GreenhousePlanner.history
+        val catalog = GreenhousePlanner.catalog
+        list.child(row().apply {
+            gap(6); verticalAlignment(VerticalAlignment.TOP)
+            child(harvested(harvestTotals(harvests, now), 49))
+            child(UIContainers.verticalFlow(Sizing.fill(49), Sizing.content()).apply {
+                gap(2); child(ProfitBars(dailyProfit(harvests, now, 14)))
+                child(label("Last 14 days, estimated at the price when harvested", MUTED).apply { fontSize = 8f; horizontalSizing(Sizing.fill()) })
+            })
+        })
+        if (harvests.isEmpty()) return run { list.child(note("Harvests appear here once you harvest a mutation in a planned plot.")) }
+        list.child(label("By mutation", MUTED).apply { fontSize = 9f })
+        harvests.groupBy { it.plantId }.entries.sortedByDescending { (_, items) -> items.sumOf { it.revenue - it.cost } }.forEach { (id, items) ->
+            list.child(row().apply {
+                gap(6); padding(Insets.horizontal(6))
+                child(label(catalog?.get(id)?.name ?: id).horizontalSizing(Sizing.expand()))
+                child(label("${items.size} harvest${if (items.size == 1) "" else "s"}", MUTED))
+                child(label(GreenhousePlanner.signed(items.sumOf { it.revenue - it.cost }), GREEN))
+            })
+        }
+        list.child(label("Recent", MUTED).apply { fontSize = 9f })
+        harvests.asReversed().take(30).forEach { harvest ->
+            list.child(row().apply {
+                gap(6); padding(Insets.horizontal(6))
+                child(label("${GreenhousePlanner.age(now - harvest.at)} ago", MUTED).apply { fontSize = 8f; horizontalSizing(Sizing.fixed(70)) })
+                child(label("${catalog?.get(harvest.plantId)?.name ?: harvest.plantId} · plot ${harvest.plot}").horizontalSizing(Sizing.expand()))
+                child(label(GreenhousePlanner.signed(harvest.revenue - harvest.cost), if (harvest.revenue >= harvest.cost) GREEN else MenuTheme.RED))
+            })
+        }
     }
 
     private fun overview(plots: List<GreenhousePlanner.Plot>, now: Long) = card(MenuTheme.ACCENT).apply {
@@ -120,7 +324,10 @@ class GreenhouseScreen : MenuScreen(Component.literal("Greenhouses"), MenuPage.G
                     gap(6)
                     child(label("Stand at the plot and run /sm greenhouse import to read what is planted, or plan one with auto or plan <mutation>.", MUTED).horizontalSizing(Sizing.expand()))
                     child(button("Import", 56) { chat { GreenhousePlanner.importPlot(plot, null) } }.tooltip(Component.literal("Read what is planted on this plot (stand near it)")))
+                    child(button("Plan best", 70) { GreenhousePlanner.planFor(plot, null); showMenuToast("Planning plot ${plot.name}…", MenuToastKind.INFO) }
+                        .tooltip(Component.literal("Solve a layout for the most profitable mutation; Mutations lists the others")))
                     teleport?.let(::child)
+                    child(removeButton(plot))
                 })
                 return@apply
             }
@@ -149,13 +356,15 @@ class GreenhouseScreen : MenuScreen(Component.literal("Greenhouses"), MenuPage.G
             if (compact) child(tiles)
             child(row().apply {
                 gap(8); verticalAlignment(VerticalAlignment.TOP)
-                child(GreenhouseGrid(layout, plot.status, if (panelWidth < 450) 12 else 16) { GreenhousePlanner.targetEstimate(plot, it, now) })
+                child(GreenhouseGrid(layout, plot.status, if (panelWidth < 450) 12 else 16, plot.locked, { cell -> GreenhousePlanner.toggleLock(plot, cell) }) {
+                    GreenhousePlanner.targetEstimate(plot, it, now)
+                })
                 child(UIContainers.verticalFlow(Sizing.expand(), Sizing.content()).apply {
                     gap(4)
                     if (!compact) child(tiles)
                     rows.filter { it.state != GrowthState.WAITING }.takeIf { it.isNotEmpty() }?.let { child(GrowthRows(it)) }
                     child(GreenhouseLegend(layout))
-                    child(label("Faded = not planted, red edge = wrong soil, dot = growing but not analysed, fill = growth, yellow = fully grown. Hover a slot for details.", MUTED).apply { fontSize = 8f; horizontalSizing(Sizing.fill()) })
+                    child(label("Faded = not planted, red edge = wrong soil, dot = growing but not analysed, fill = growth, yellow = fully grown, cross = locked. Hover a slot for details; click one to lock it out of the next plan.", MUTED).apply { fontSize = 8f; horizontalSizing(Sizing.fill()) })
                     child(actions(listOfNotNull(
                         teleport,
                         button("Shopping list", 92) { chat { GreenhousePlanner.showMissing(plot) } }.tooltip(Component.literal("Everything still missing; click an item to fetch it from your sacks or buy it")),
@@ -163,6 +372,7 @@ class GreenhouseScreen : MenuScreen(Component.literal("Greenhouses"), MenuPage.G
                             .tooltip(Component.literal("Replace this layout with what is planted now (stand near the plot)")),
                         button("Recompute", 76) { chat { GreenhousePlanner.plan(plot, force = true) } }
                             .tooltip(Component.literal("Solve a new layout for ${target ?: "the best mutation"}; the current one is replaced")),
+                        removeButton(plot),
                     )))
                 })
             })
@@ -226,6 +436,12 @@ class GreenhouseScreen : MenuScreen(Component.literal("Greenhouses"), MenuPage.G
         lines.forEach { child(label(it, MUTED).apply { fontSize = 8f; horizontalSizing(Sizing.fill()) }) }
     }
 
+    private fun removeButton(plot: GreenhousePlanner.Plot) = button("Remove", 60) {
+        navigateMenu(MenuConfirmScreen(this, "Remove plot ${plot.name}?", "Its anchor, layout, locks and growth readings are forgotten. Harvest history is kept.", "Remove") {
+            GreenhousePlanner.removePlot(plot.name)
+        })
+    }.tooltip(Component.literal("Forget this plot (asks first)"))
+
     /** Chat output is hidden behind the menu, so actions that answer in chat close it first. */
     private fun chat(action: () -> Unit) { onClose(); MC.instance.execute(action) }
 
@@ -257,6 +473,7 @@ class GreenhouseScreen : MenuScreen(Component.literal("Greenhouses"), MenuPage.G
  */
 internal class GreenhouseGrid(
     private val layout: Layout, private val status: String, private val cell: Int = 9,
+    private val locked: BooleanArray? = null, private val onCell: ((Int) -> Unit)? = null,
     /** A placement's growth from the Plant Diagnostics Tool, or null when not analysed. */
     private val growth: (Placement) -> GrowthEstimate? = { null },
 ) : BaseUIComponent() {
@@ -301,6 +518,13 @@ internal class GreenhouseGrid(
             } }
             if (wrongSoil) g.roundedBorder(px, py, size, size, 1.5, 1.0, MenuTheme.alpha(MenuTheme.RED))
         }
+        locked?.forEachIndexed { index, isLocked ->
+            if (!isLocked) return@forEachIndexed
+            val px = x() + index / GREENHOUSE_SIZE * cell + 1; val py = y() + index % GREENHOUSE_SIZE * cell + 1
+            g.roundedRect(px, py, cell - 1, cell - 1, 1.0, MenuTheme.alpha(MenuTheme.PANEL, 200))
+            val color = io.wispforest.owo.ui.core.Color.ofArgb(MenuTheme.alpha(MenuTheme.RED, 160))
+            g.drawLine(px + 2, py + 2, px + cell - 4, py + cell - 4, 1.0, color); g.drawLine(px + cell - 4, py + 2, px + 2, py + cell - 4, 1.0, color)
+        }
         val inside = mouseX in x() until x() + width() - 1 && mouseY in y() until y() + height() - 1
         val index = if (inside) greenhouseCellAt(mouseX - x(), mouseY - y(), cell) else -1
         if (index != hoveredIndex) {
@@ -309,9 +533,19 @@ internal class GreenhouseGrid(
         }
     }
 
+    override fun onMouseDown(click: net.minecraft.client.input.MouseButtonEvent, doubled: Boolean): Boolean {
+        val action = onCell ?: return super.onMouseDown(click, doubled)
+        if (click.button() != 0) return super.onMouseDown(click, doubled)
+        val index = greenhouseCellAt(click.x().toInt(), click.y().toInt(), cell)
+        if (index !in 0 until GREENHOUSE_CELLS) return false
+        action(index); hoveredIndex = -2
+        return true
+    }
+
     private fun describe(index: Int): String {
         val plan = layout.cells[index]
-        val where = "Row ${index / GREENHOUSE_SIZE + 1}, column ${index % GREENHOUSE_SIZE + 1}"
+        val where = "Row ${index / GREENHOUSE_SIZE + 1}, column ${index % GREENHOUSE_SIZE + 1}" +
+            if (locked?.getOrNull(index) == true) " · locked (click to unlock)" else if (onCell != null) " · click to lock" else ""
         if (plan == null) return "$where\nUnused"
         val name = GreenhousePlanner.catalog?.get(plan.plantId)?.name ?: plan.plantId
         val state = when (status.getOrNull(index)?.let(CellStatus::of)) {

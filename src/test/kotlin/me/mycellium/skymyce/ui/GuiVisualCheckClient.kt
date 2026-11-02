@@ -1,5 +1,6 @@
 package me.mycellium.skymyce.ui
 
+import me.mycellium.skymyce.features.garden.greenhouse.GreenhouseTab
 import tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonClass
 import me.mycellium.skymyce.config.SettingsScreen
 import me.mycellium.skymyce.config.SettingsTab
@@ -195,6 +196,10 @@ class GuiVisualCheckClient : ClientModInitializer {
             Scene("cosmetics-light", ThemePreset.LIGHT) { CosmeticsScreen() },
             Scene("greenhouse", ThemePreset.SIGNATURE) { greenhouseFixture() },
             Scene("greenhouse-narrow", ThemePreset.LIGHT, 640, 480, 2) { greenhouseFixture() },
+            Scene("greenhouse-mutations", ThemePreset.SIGNATURE) { greenhouseFixture(GreenhouseTab.MUTATIONS) },
+            Scene("greenhouse-shopping", ThemePreset.SIGNATURE) { greenhouseFixture(GreenhouseTab.SHOPPING) },
+            Scene("greenhouse-unlock", ThemePreset.SIGNATURE) { greenhouseFixture(GreenhouseTab.UNLOCK) },
+            Scene("greenhouse-history", ThemePreset.SIGNATURE) { greenhouseFixture(GreenhouseTab.HISTORY) },
             Scene("greenhouse-wide", ThemePreset.SIGNATURE, 1920, 1080, 1) { greenhouseFixture() },
             Scene("search-light", ThemePreset.LIGHT) { MenuDirectoryScreen() },
             Scene("leaderboards-community-return", ThemePreset.SIGNATURE) { LeaderboardScreen() },

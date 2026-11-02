@@ -375,6 +375,26 @@ fun main() {
     check(history.all { harvestFromJson(it.toJson(), catalog) == it } && harvestFromJson(com.google.gson.JsonParser.parseString("""[1,"bad name!","GLASSCORN",1,1]"""), catalog) == null) { "Harvest json" }
 
     checkMarket()
+    // Workspace mutation browser: search matches names and ingredients; every sort keeps all matches.
+    val browserRanked = rankMutations(catalog, quotes, GreenhouseSettings(0, 0, PriceMode.SELL_OFFER))
+        .map { GreenhousePlanner.PlotRanked(it, null, null) }
+    check(browserRanked.isNotEmpty())
+    val glass = greenhouseMutationRows(browserRanked, catalog, "glass", MutationSort.PROFIT)
+    check(glass.isNotEmpty() && glass.all { "glass" in it.entry.plant.name.lowercase() || it.entry.plant.requires.keys.any { id -> "glass" in (catalog[id]?.name ?: id).lowercase() } })
+    val ingredient = catalog[browserRanked.first().entry.plant.requires.keys.first()]!!.name
+    check(greenhouseMutationRows(browserRanked, catalog, ingredient, MutationSort.NAME).any { it.entry.plant.id == browserRanked.first().entry.plant.id }) { "Ingredient search" }
+    for (order in MutationSort.entries) check(greenhouseMutationRows(browserRanked, catalog, "", order).size == browserRanked.size)
+    check(greenhouseMutationRows(browserRanked, catalog, "", MutationSort.PROFIT).map { it.entry.profitPerHour }.zipWithNext().all { (a, b) -> a >= b })
+    check(greenhouseMutationRows(browserRanked, catalog, "", MutationSort.NAME).map { it.entry.plant.name }.zipWithNext().all { (a, b) -> a <= b })
+    check(greenhouseMutationRows(browserRanked, catalog, "zzzz", MutationSort.PROFIT).isEmpty())
+    // Shopping list sources match the chat list: crafted seeds, sack crops, Bazaar buys and soil.
+    val list = greenhouseShoppingList(catalog, mapOf("MELON_SEEDS" to 6, "CARROT" to 3, "GLASSCORN" to 1, "UNKNOWN_CROP" to 9), mapOf(Soil.entries.first() to 2))
+    check(list.size == 4) { "Unknown crops must drop out: $list" }
+    check(list.single { it.key == "MELON_SEEDS" }.let { it.source == ShoppingSource.CRAFT && it.from == "Melon Slice" && it.fetch == sackFetch(catalog["MELON_SEEDS"]!!, 6)!!.second })
+    check(list.single { it.key == "CARROT" }.source == ShoppingSource.SACKS)
+    check(list.single { it.key == "GLASSCORN" }.source == ShoppingSource.BAZAAR)
+    check(list.single { it.key.startsWith("SOIL_") }.let { it.source == ShoppingSource.SOIL && it.count == 2 })
+    check(list.map { it.source } == list.map { it.source }.sorted()) { "Shopping groups out of order" }
     println("Greenhouse checks passed: catalog, site profit formula, timer, hash buckets, solver validity and parity, repricing, per-day profit, plot persistence, import and harvest history, Bazaar market parsing")
 }
 

@@ -601,9 +601,14 @@ object GreenhousePlanner : SkyMyceModule() {
     }
 
     private fun choose(id: String?) {
+        if (id != null && catalog?.get(id)?.solvable != true) return displayModMessage("§cUnknown or unsupported mutation: $id")
+        planFor(plotHereOrExplain() ?: return, id)
+    }
+
+    /** Targets [id] (null: the most profitable) on [plot] and solves; shared by `/sm greenhouse plan|auto` and the workspace. */
+    internal fun planFor(plot: Plot, id: String?) {
         val plant = id?.let { catalog?.get(it) }
         if (id != null && plant?.solvable != true) return displayModMessage("§cUnknown or unsupported mutation: $id")
-        val plot = plotHereOrExplain() ?: return
         plot.target = plant?.id
         save()
         plan(plot, force = false)
@@ -634,7 +639,7 @@ object GreenhousePlanner : SkyMyceModule() {
         MC.player.connection.sendCommand("tptoplot $number")
     }
 
-    private fun removePlot(name: String) {
+    internal fun removePlot(name: String) {
         val removed = plots.firstOrNull { it.name.equals(name, true) } ?: return displayModMessage("§cNo Greenhouse plot named $name")
         plots.remove(removed)
         unlockPlots.remove(removed.name); unlockQueue.remove(removed)
@@ -647,24 +652,20 @@ object GreenhousePlanner : SkyMyceModule() {
     private fun toggleLock(row: Int, column: Int) {
         val plot = plotHereOrExplain() ?: return
         val cell = row * GREENHOUSE_SIZE + column
-        plot.locked[cell] = !plot.locked[cell]
-        save()
+        toggleLock(plot, cell)
         displayModMessage("§7Cell ${row + 1},${column + 1} is now ${if (plot.locked[cell]) "§clocked" else "§aunlocked"}§7. ${plot.locked.count { !it }} cells usable" +
             if (plot.layout != null) "; run /sm greenhouse recompute to re-plan around it" else "")
     }
 
-    /** Base crops kept in sacks, so they are fetched with /gfs instead of bought. */
-    private val SACK_CROPS = setOf("CARROT", "POTATO", "CACTUS", "SUGAR_CANE", "WHEAT_SEEDS", "RED_MUSHROOM", "BROWN_MUSHROOM", "NETHER_WART", "SUNFLOWER", "WILD_ROSE")
-
-    /** Seeds no one sells: taken from sacks as the crop they are crafted from, named here. */
-    private val CRAFTED_SEEDS = mapOf("MELON_SEEDS" to "Melon Slice", "PUMPKIN_SEEDS" to "Pumpkin")
-
-    /** What /gfs takes for [count] of [plant]: the crop itself, or the item its seeds are crafted from. Null when bought. */
-    private fun sackFetch(plant: Plant, count: Int): Pair<String, Int>? = when (plant.id) {
-        in CRAFTED_SEEDS -> plant.bazaarId.lowercase() to (count + plant.perItem - 1) / plant.perItem
-        in SACK_CROPS -> plant.itemIds.first().lowercase() to count
-        else -> null
+    /** Locks or unlocks a cell so the solver keeps it empty; the next recompute plans around it. */
+    internal fun toggleLock(plot: Plot, cell: Int): Boolean {
+        plot.locked[cell] = !plot.locked[cell]
+        revision++; save()
+        return plot.locked[cell]
     }
+
+    /** What a plot still needs, by where it comes from; the chat list and the workspace both read this. */
+    internal fun shoppingList(plot: Plot): List<ShoppingItem> = catalog?.let { greenhouseShoppingList(it, plot.missingPlants, plot.missingSoil) }.orEmpty()
 
     /** What a plot still needs, one line per source; each item is a button that fetches or buys exactly what is missing. */
     internal fun showMissing(plot: Plot) {
@@ -673,10 +674,8 @@ object GreenhousePlanner : SkyMyceModule() {
         if (plot.scannedAt == 0L) return displayModMessage("§7Stand near Greenhouse plot ${plot.name} in the Garden to check what is missing")
         val stale = if (plot !== this.plot || hudLines == null) " §8(as of ${age(System.currentTimeMillis() - plot.scannedAt)} ago)" else ""
         if (plot.missingPlants.isEmpty() && plot.missingSoil.isEmpty()) return displayModMessage("§aPlot ${plot.name} has everything it needs$stale")
-        val crops = plot.missingPlants.entries.mapNotNull { (id, count) -> catalog[id]?.let { it to count } }.sortedByDescending { it.second }
-        val crafted = crops.filter { it.first.id in CRAFTED_SEEDS }
-        val (sacked, bought) = (crops - crafted.toSet()).partition { sackFetch(it.first, it.second) != null }
-        val cropCount = crops.sumOf { it.second }; val soilCount = plot.missingSoil.values.sum()
+        val items = shoppingList(plot)
+        val cropCount = plot.missingPlants.entries.filter { catalog[it.key] != null }.sumOf { it.value }; val soilCount = plot.missingSoil.values.sum()
         displayModMessage("§aPlot ${plot.name} still needs " + listOfNotNull(
             "§f$cropCount§a crop${if (cropCount == 1) "" else "s"}".takeIf { cropCount > 0 },
             "§f$soilCount§a soil".takeIf { soilCount > 0 }).joinToString(" and ") + "$stale §7· click an item to get it")
@@ -690,15 +689,13 @@ object GreenhousePlanner : SkyMyceModule() {
             }
             displayModMessage(text)
         }
-        line("Sacks", sacked.map { (plant, count) -> Triple(plant.name, count, plant.id) }) { name, count -> "Take $count $name from your sacks (/gfs)" }
-        line("Craft", crafted.map { (plant, count) ->
-            val (_, amount) = sackFetch(plant, count)!!
-            Triple("${CRAFTED_SEEDS.getValue(plant.id)} §8→ §7$count ${plant.name}", amount, plant.id)
-        }) { name, count -> "Take $count ${name.substringBefore(" §8")} from your sacks (/gfs), then craft them into seeds" }
-        line("Bazaar", bought.map { (plant, count) -> Triple(plant.name, count, plant.id) }) { name, count -> "Open $name in the Bazaar and copy $count for the buy sign" }
-        line("Soil", plot.missingSoil.entries.sortedByDescending { it.value }.map { (soil, count) -> Triple(soilName(soil), count, "SOIL_${soil.name}") }) { name, count ->
-            "Take $count $name from your sacks (/gfs)"
+        fun of(source: ShoppingSource) = items.filter { it.source == source }
+        line("Sacks", of(ShoppingSource.SACKS).map { Triple(it.name, it.count, it.key) }) { name, count -> "Take $count $name from your sacks (/gfs)" }
+        line("Craft", of(ShoppingSource.CRAFT).map { Triple("${it.from} §8→ §7${it.count} ${it.name}", it.fetch, it.key) }) { name, count ->
+            "Take $count ${name.substringBefore(" §8")} from your sacks (/gfs), then craft them into seeds"
         }
+        line("Bazaar", of(ShoppingSource.BAZAAR).map { Triple(it.name, it.count, it.key) }) { name, count -> "Open $name in the Bazaar and copy $count for the buy sign" }
+        line("Soil", of(ShoppingSource.SOIL).map { Triple(it.name, it.count, it.key) }) { name, count -> "Take $count $name from your sacks (/gfs)" }
     }
 
     private var copiedAt = 0L
@@ -727,7 +724,7 @@ object GreenhousePlanner : SkyMyceModule() {
     }
 
     /** One shopping-list click: /gfs for sack crops and soil, or /bz with the amount copied. Sends that one command. */
-    private fun get(plotName: String, key: String) {
+    internal fun get(plotName: String, key: String) {
         val catalog = catalog ?: return
         val plot = plots.firstOrNull { it.name.equals(plotName, true) } ?: return displayModMessage("§cNo Greenhouse plot named $plotName")
         if (key.startsWith("SOIL_")) {
@@ -1229,7 +1226,10 @@ object GreenhousePlanner : SkyMyceModule() {
 
     /** Mutations the Carpenter's All Mutations menu showed as ANALYZED, or the game said were analysed since. */
     private val analyzed = HashSet<String>()
+    internal fun isAnalyzed(id: String) = id in analyzed
     private var statusReadAt = 0L
+    /** When the Carpenter's All Mutations menu was last read (0: never); the workspace shows it as data freshness. */
+    internal val mutationStatusReadAt get() = statusReadAt
     private var unlockStep = UnlockStep.OFF
     private var unlockCount = 0
     /** The plots the guide plans, by name; picked ones while choosing. */
@@ -1256,7 +1256,7 @@ object GreenhousePlanner : SkyMyceModule() {
     }
 
     /** /sm greenhouse unlock: the guide's status while it runs, else the first step. */
-    private fun unlockGuide() {
+    internal fun unlockGuide() {
         val catalog = catalog ?: return displayModMessage("§cGreenhouse data is unavailable")
         if (unlockStep == UnlockStep.RUNNING) return showUnlockStatus(catalog)
         unlockStep = UnlockStep.READING
@@ -1368,7 +1368,7 @@ object GreenhousePlanner : SkyMyceModule() {
     }
 
     /** Marks a mutation analysed by hand, for when the game's message or menu was missed. */
-    private fun markAnalyzed(id: String) {
+    internal fun markAnalyzed(id: String) {
         val plant = catalog?.get(id)?.takeIf { it.mutation } ?: return displayModMessage("§cUnknown mutation: $id")
         if (!analyzed.add(plant.id)) return displayModMessage("§7${plant.name} is already analysed")
         save(); revision++
@@ -2025,7 +2025,7 @@ object GreenhousePlanner : SkyMyceModule() {
         Soil.MYCELIUM -> "mycel"; Soil.END_STONE -> "ender_stone"
     }
 
-    internal fun soilName(soil: Soil) = soil.name.lowercase().replace('_', ' ').replaceFirstChar { it.uppercase() }
+    internal fun soilName(soil: Soil) = greenhouseSoilName(soil)
 
     internal fun soilColor(soil: Soil) = when (soil) {
         Soil.FARMLAND, Soil.DIRT -> 0x8B5A2B; Soil.SAND -> 0xE8D9A0; Soil.SOUL_SAND -> 0x5A4030
@@ -2039,3 +2039,38 @@ object GreenhousePlanner : SkyMyceModule() {
     }
 
 }
+
+internal enum class ShoppingSource(val title: String) {
+    SACKS("From your sacks"), CRAFT("Craft from sack items"), BAZAAR("Buy on the Bazaar"), SOIL("Soil from your sacks")
+}
+/** [fetch] is how many of [from] (crafted seeds) or of the item itself one Get takes. */
+internal data class ShoppingItem(val name: String, val count: Int, val key: String, val source: ShoppingSource, val fetch: Int = count, val from: String? = null)
+
+/** Base crops kept in sacks, so they are fetched with /gfs instead of bought. */
+private val SACK_CROPS = setOf("CARROT", "POTATO", "CACTUS", "SUGAR_CANE", "WHEAT_SEEDS", "RED_MUSHROOM", "BROWN_MUSHROOM", "NETHER_WART", "SUNFLOWER", "WILD_ROSE")
+
+/** Seeds no one sells: taken from sacks as the crop they are crafted from, named here. */
+private val CRAFTED_SEEDS = mapOf("MELON_SEEDS" to "Melon Slice", "PUMPKIN_SEEDS" to "Pumpkin")
+
+/** What /gfs takes for [count] of [plant]: the crop itself, or the item its seeds are crafted from. Null when bought. */
+internal fun sackFetch(plant: Plant, count: Int): Pair<String, Int>? = when (plant.id) {
+    in CRAFTED_SEEDS -> plant.bazaarId.lowercase() to (count + plant.perItem - 1) / plant.perItem
+    in SACK_CROPS -> plant.itemIds.first().lowercase() to count
+    else -> null
+}
+
+/** Missing crops and soil grouped by source; pure so the workspace list can be checked without a client. */
+internal fun greenhouseShoppingList(catalog: PlantCatalog, missingPlants: Map<String, Int>, missingSoil: Map<Soil, Int>): List<ShoppingItem> {
+    val crops = missingPlants.entries.mapNotNull { (id, count) -> catalog[id]?.let { it to count } }.sortedByDescending { it.second }
+    return crops.map { (plant, count) ->
+        val fetched = sackFetch(plant, count)
+        when {
+            plant.id in CRAFTED_SEEDS -> ShoppingItem(plant.name, count, plant.id, ShoppingSource.CRAFT, fetched!!.second, CRAFTED_SEEDS.getValue(plant.id))
+            fetched != null -> ShoppingItem(plant.name, count, plant.id, ShoppingSource.SACKS)
+            else -> ShoppingItem(plant.name, count, plant.id, ShoppingSource.BAZAAR)
+        }
+    }.sortedBy { it.source } + missingSoil.entries.sortedByDescending { it.value }
+        .map { (soil, count) -> ShoppingItem(greenhouseSoilName(soil), count, "SOIL_${soil.name}", ShoppingSource.SOIL) }
+}
+
+internal fun greenhouseSoilName(soil: Soil) = soil.name.lowercase().replace('_', ' ').replaceFirstChar { it.uppercase() }

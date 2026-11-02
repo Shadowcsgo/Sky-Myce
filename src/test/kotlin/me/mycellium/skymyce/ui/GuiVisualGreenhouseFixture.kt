@@ -5,7 +5,7 @@ import net.minecraft.core.BlockPos
 import net.minecraft.core.Direction
 
 /** One planned and partly built plot with harvest history, plus an unplanned one, for the Greenhouses screen. */
-internal fun greenhouseFixture(): GreenhouseScreen {
+internal fun greenhouseFixture(tab: GreenhouseTab = GreenhouseTab.OVERVIEW): GreenhouseScreen {
     if (GreenhousePlanner.plots.isEmpty()) {
         val catalog = GreenhousePlanner.catalog!!
         val now = System.currentTimeMillis()
@@ -46,7 +46,9 @@ internal fun greenhouseFixture(): GreenhouseScreen {
             snoozling.targets.take(2).forEachIndexed { i, t -> growth[t.row * GREENHOUSE_SIZE + t.col] = GrowthReading(2 + i * 5, 11, now - 3 * hour) }
         }
         GreenhousePlanner.plots += GreenhousePlanner.Plot("north").apply { anchor = GreenhousePlanner.Anchor(BlockPos(-101, 73, -150), Direction.EAST) }
+        // Offline client: give the mutation browser the same fixture prices the layouts were solved with.
+        GreenhousePlanner::class.java.getDeclaredField("prices").apply { isAccessible = true }.set(null, quotes + ("SNOOZLING" to Quote(4e5, 5e5)))
         repeat(18) { i -> GreenhousePlanner.history += Harvest(now - (i * 17 + 3) * hour, "1", "GLASSCORN", 900_000.0 + i * 10_000, if (i == 5) 1_200_000.0 else 140_000.0) }
     }
-    return GreenhouseScreen()
+    return GreenhouseScreen(tab)
 }
