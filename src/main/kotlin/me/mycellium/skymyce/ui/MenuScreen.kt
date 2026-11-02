@@ -299,6 +299,11 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
     protected open fun extractNativeContent(graphics: GuiGraphicsExtractor, screenScaleX: Float, screenScaleY: Float, partialTicks: Float) {}
 
     final override fun extractRenderState(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTicks: Float) {
+        val started = System.nanoTime()
+        try { extractMenu(g, mouseX, mouseY, partialTicks) } finally { AutoGraphics.recordMenuFrame(System.nanoTime() - started, painting = false) }
+    }
+
+    private fun extractMenu(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTicks: Float) {
         RuntimeProfiler.measure(RuntimeProfiler.Area.GUI) {
         if (invalid) { onClose(); return }
         if (texture.prepareFrame()) recoverRenderer()

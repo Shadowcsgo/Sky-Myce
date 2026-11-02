@@ -549,6 +549,7 @@ internal class SkijaMenuTexture : AutoCloseable {
             val batch = pending.entries.map { it.key to it.value }
             pending.clear()
             if (!available()) return
+            val started = System.nanoTime()
             try {
                 RuntimeProfiler.measure(RuntimeProfiler.Area.GUI) {
                     SkijaGlState().use {
@@ -561,6 +562,7 @@ internal class SkijaMenuTexture : AutoCloseable {
                         SkijaMenuPainter.releaseRetired()
                     }
                 }
+                if (batch.isNotEmpty()) AutoGraphics.recordMenuFrame(System.nanoTime() - started, painting = true)
             } catch (failure: Exception) { disable(failure) }
             catch (failure: LinkageError) { disable(failure) }
         }

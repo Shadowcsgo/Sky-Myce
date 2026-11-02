@@ -335,12 +335,39 @@ class AutoGraphicsController(private val tiers: List<GuiQuality> = AUTO_TIERS) {
     }
 }
 
+/** Smoothed CPU cost of menu frames; O(1), no allocation per frame. */
+internal class MenuCost {
+    var averageNanos = 0.0
+        private set
+    var lastAt = 0L
+        private set
+    fun add(nanos: Long, now: Long) {
+        // A fresh menu session starts from its first frame instead of an old average.
+        averageNanos = if (now - lastAt > 2_000 || averageNanos == 0.0) nanos.toDouble() else averageNanos * .95 + nanos * .05
+        lastAt = now
+    }
+}
+
+internal fun menuCostLine(build: MenuCost, paint: MenuCost, now: Long): String {
+    val last = maxOf(build.lastAt, paint.lastAt)
+    if (last == 0L) return "§7Open a Sky-Myce menu, then run /sm graphics again to see the menu's own cost."
+    return String.format(Locale.ROOT, "§7Sky-Myce menu CPU: %.2f ms layout per frame + %.2f ms drawing per changed frame (last open %ds ago)",
+        build.averageNanos / 1e6, paint.averageNanos / 1e6, (now - last) / 1000)
+}
+
 /**
  * Feeds [AutoGraphicsController] once per client tick (20 Hz, two numbers read from the client) and exposes the
  * effective quality every renderer reads. Only Sky-Myce's own effects change; Minecraft's options are never touched.
  */
 object AutoGraphics : SkyMyceModule() {
     val controller = AutoGraphicsController()
+    /** The same rolling FPS/p95 window, fed in every mode so `/sm graphics` can report it; its tier is never used. */
+    private val measurements = AutoGraphicsController()
+    private val menuBuild = MenuCost()
+    private val menuPaint = MenuCost()
+
+    /** CPU time of one menu frame: [painting] is the Skia flush, otherwise layout and command building. */
+    fun recordMenuFrame(nanos: Long, painting: Boolean) = (if (painting) menuPaint else menuBuild).add(nanos, System.currentTimeMillis())
 
     /** The quality to draw with now: the user's fixed choice, or Auto's current tier. */
     val quality: GuiQuality
@@ -350,10 +377,13 @@ object AutoGraphics : SkyMyceModule() {
     fun onTick() = me.mycellium.skymyce.features.dev.RuntimeProfiler.measure(me.mycellium.skymyce.features.dev.RuntimeProfiler.Area.AUTO_GRAPHICS) { sampleQuality() }
 
     private fun sampleQuality() {
-        if (ThemeConfig.graphicsQuality != GuiQuality.AUTO) return
         val now = System.currentTimeMillis()
         val screen = MC.screen
-        if (MC.instance.level == null || screen is LevelLoadingScreen || screen is ProgressScreen) { controller.pause(now); return }
+        val loading = MC.instance.level == null || screen is LevelLoadingScreen || screen is ProgressScreen
+        if (loading) measurements.pause(now)
+        else measurements.sample(now, MC.instance.fps, MC.instance.frameTimeNs / 1_000_000.0, target(), AutoResponse.NORMAL)
+        if (ThemeConfig.graphicsQuality != GuiQuality.AUTO) return
+        if (loading) { controller.pause(now); return }
         controller.sample(now, MC.instance.fps, MC.instance.frameTimeNs / 1_000_000.0, target(), AutoResponse.NORMAL)
     }
 
@@ -369,13 +399,17 @@ object AutoGraphics : SkyMyceModule() {
         return minOf(AUTO_TARGET_FPS, capped).coerceAtLeast(20)
     }
 
-    /** `/sm graphics`: mode, effective quality, recent measurements and the last change. */
+    /** `/sm graphics`: mode, recent frame times, the menu's own CPU cost and the last Auto change, for comparing menu open and closed. */
     fun status(): List<String> {
+        val now = System.currentTimeMillis()
         val mode = ThemeConfig.graphicsQuality
-        if (mode != GuiQuality.AUTO) return listOf("§bGraphics: §f$mode §7(fixed). Choose Auto in Settings → Appearance to adapt.")
-        val (fps, p95) = controller.summary(System.currentTimeMillis())
-        return listOf("§bGraphics: §fAuto §7→ now §f${controller.quality}",
-            String.format(Locale.ROOT, "§7Recent: %.0f FPS, 95%% of frames under %.1f ms; target %d FPS", fps, p95, target()),
-            "§7${controller.reason}")
+        val (fps, p95) = measurements.summary(now)
+        return buildList {
+            add(if (mode == GuiQuality.AUTO) "§bGraphics: §fAuto §7→ now §f${controller.quality}" else "§bGraphics: §f$mode §7(fixed; Settings → Performance and Graphics)")
+            add(String.format(Locale.ROOT, "§7Last 5 s: %.0f FPS, 95%% of frames under %.1f ms", fps, p95))
+            add(menuCostLine(menuBuild, menuPaint, now))
+            add("§7Background blur behind menus: ${if (menuBlurAllowed(quality)) "on" else "off"}; text is full resolution in every mode")
+            if (mode == GuiQuality.AUTO) add("§7${controller.reason}")
+        }
     }
 }

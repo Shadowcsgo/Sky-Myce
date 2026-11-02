@@ -71,5 +71,14 @@ fun autoGraphicsCheck() {
     val shown = StringBuilder(); names.sequence(seq("hi MisterKrister!")).accept { _, _, c -> shown.appendCodePoint(c); true }
     check(shown.toString() == "hi Krister!") { shown.toString() }
     val plain = seq("nothing to see"); check(names.sequence(plain) === plain) { "Text without names passes through untouched" }
+    // /sm graphics menu cost: smoothed, restarts per menu session, and says how to measure before any menu opened.
+    val build = MenuCost(); val paint = MenuCost()
+    check(menuCostLine(build, paint, 10_000).contains("Open a Sky-Myce menu"))
+    build.add(2_000_000, 1_000); repeat(200) { build.add(1_000_000, 1_000L + it) }
+    check(kotlin.math.abs(build.averageNanos - 1_000_000) < 5_000) { "Menu cost did not converge: ${build.averageNanos}" }
+    build.add(4_000_000, 10_000)
+    check(build.averageNanos == 4_000_000.0) { "A new menu session kept the old average" }
+    paint.add(500_000, 10_000)
+    check(menuCostLine(build, paint, 13_000).let { "4.00 ms layout" in it && "0.50 ms drawing" in it && "3s ago" in it })
     println("Auto graphics checks passed: sustained drops, recovery, cooldown, floor, hysteresis, spikes, loading, missing data and frame caps")
 }
