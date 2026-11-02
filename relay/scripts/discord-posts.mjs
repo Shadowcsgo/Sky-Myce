@@ -3,9 +3,10 @@
 // creating #changelog and #features (the bot needs View, Send Messages and Embed Links there) is all the setup.
 //
 //   node relay/scripts/discord-posts.mjs <env file with USER_BOT_TOKEN> changelog <version>
-//   node relay/scripts/discord-posts.mjs <env file with USER_BOT_TOKEN> features <feature-list.md>
+//   node relay/scripts/discord-posts.mjs <env file with USER_BOT_TOKEN> features FEATURES.md
 //
-// Both are idempotent: a version already posted is skipped, and the feature list edits its earlier messages in place.
+// Both are idempotent: a version already posted is edited in place when its text changed, and the feature list edits
+// its earlier messages in place. FEATURES.md is the polished copy of `./gradlew featureList` (build/feature-list.md).
 import { readFile } from "node:fs/promises";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -43,9 +44,28 @@ async function api(path, init = {}) {
 }
 
 const channels = await api(`/guilds/${guild}/channels`);
-const channel = name => channels.find(c => c.type === 0 && c.name === name)
-  ?? fail(`No #${name} text channel yet. Create it in the Sky-Myce server and let MouseBot Frontend send messages there.`);
 const me = await api("/users/@me");
+const member = await api(`/guilds/${guild}/members/${me.id}`), roles = await api(`/guilds/${guild}/roles`);
+const NEEDED = { "View Channel": 1n << 10n, "Send Messages": 1n << 11n, "Embed Links": 1n << 14n, "Read Message History": 1n << 16n };
+/** The bot's effective permissions in a channel (Discord's role + overwrite order); administrators get everything. */
+function permissionsIn(target) {
+  let bits = roles.filter(r => r.id === guild || member.roles.includes(r.id)).reduce((all, r) => all | BigInt(r.permissions), 0n);
+  if (bits & 8n) return ~0n;
+  const overwrites = target.permission_overwrites ?? [], everyone = overwrites.find(o => o.id === guild);
+  if (everyone) bits = (bits & ~BigInt(everyone.deny)) | BigInt(everyone.allow);
+  const own = overwrites.filter(o => o.type === 0 && member.roles.includes(o.id));
+  bits = (bits & ~own.reduce((d, o) => d | BigInt(o.deny), 0n)) | own.reduce((a, o) => a | BigInt(o.allow), 0n);
+  const user = overwrites.find(o => o.type === 1 && o.id === me.id);
+  return user ? (bits & ~BigInt(user.deny)) | BigInt(user.allow) : bits;
+}
+// Without Read Message History the channel looks empty, so the script could not find (and would duplicate) its own posts.
+const channel = name => {
+  const target = channels.find(c => c.type === 0 && c.name === name)
+    ?? fail(`No #${name} text channel yet. Create it in the Sky-Myce server and let MouseBot Frontend send messages there.`);
+  const bits = permissionsIn(target), missing = Object.entries(NEEDED).filter(([, bit]) => !(bits & bit)).map(([label]) => label);
+  if (missing.length) fail(`MouseBot Frontend needs ${missing.join(", ")} in #${name}`);
+  return target;
+};
 const ownMessages = async id => (await api(`/channels/${id}/messages?limit=100`)).filter(m => m.author.id === me.id).reverse();
 const ACCENT = 0x4fc3f7;
 
@@ -67,11 +87,17 @@ if (action === "changelog") {
   const section = changelogSection(await readFile(resolve(repository, "CHANGELOG.md"), "utf8"), argument);
   if (!section?.changes.length) fail(`CHANGELOG.md has no changes for ${argument}`);
   const target = channel("changelog"), title = `Sky-Myce ${argument}`;
-  if ((await ownMessages(target.id)).some(m => m.embeds?.some(e => e.title === title))) { console.log(`${title} is already posted`); process.exit(0); }
-  await api(`/channels/${target.id}/messages`, { method: "POST", body: JSON.stringify({ allowed_mentions: { parse: [] }, embeds: [{
-    title, color: ACCENT, description: section.changes.map(change => `• ${change}`).join("\n").slice(0, 4000),
-    footer: { text: `${section.date ? section.date + " · " : ""}Updates install from the game; see What's New in the Daily Digest` } }] }) });
-  console.log(`Posted ${title} to #changelog`);
+  const embed = { title, color: ACCENT, description: section.changes.map(change => `• ${change}`).join("\n").slice(0, 4000),
+    footer: { text: `${section.date ? section.date + " · " : ""}Updates install from the game; see What's New in the Daily Digest` } };
+  const copies = (await ownMessages(target.id)).filter(m => m.embeds?.some(e => e.title === title));
+  // Keep the newest copy of this version and remove any older duplicates.
+  for (const extra of copies.slice(0, -1)) await api(`/channels/${target.id}/messages/${extra.id}`, { method: "DELETE" });
+  const posted = copies.at(-1);
+  if (posted?.embeds[0].description === embed.description) { console.log(`${title} is already posted`); process.exit(0); }
+  // A reworded entry edits the earlier post rather than posting the version twice.
+  await api(`/channels/${target.id}/messages${posted ? `/${posted.id}` : ""}`, { method: posted ? "PATCH" : "POST",
+    body: JSON.stringify({ allowed_mentions: { parse: [] }, embeds: [embed] }) });
+  console.log(`${posted ? "Updated" : "Posted"} ${title} in #changelog`);
 } else {
   // One message per `# Category` block keeps every embed under Discord's size limits.
   const blocks = (await readFile(argument, "utf8")).split(/^# /m).filter(block => block.trim()).map(block => {

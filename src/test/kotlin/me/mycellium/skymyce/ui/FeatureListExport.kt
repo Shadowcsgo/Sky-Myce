@@ -6,8 +6,8 @@ import java.nio.file.Path
 
 /**
  * Writes the player-facing feature list (the menu catalog: category → section → feature) as Markdown, one `# Category`
- * block per category, for the Discord #features channel. Run with `./gradlew featureList`; the output is
- * build/feature-list.md and relay/scripts/discord-posts.mjs posts it.
+ * block per category. Run with `./gradlew featureList`; the output (build/feature-list.md) is the draft that FEATURES.md
+ * polishes for the Discord #features channel (relay/scripts/discord-posts.mjs posts FEATURES.md).
  */
 internal fun featureListMarkdown(): String = buildString {
     MenuCategory.entries.forEach { category ->
