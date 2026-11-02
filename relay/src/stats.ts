@@ -38,7 +38,8 @@ export class SharedStats {
     sql.exec(`CREATE TABLE IF NOT EXISTS player_stats (
       uuid TEXT PRIMARY KEY, name TEXT NOT NULL COLLATE NOCASE UNIQUE,
       stats TEXT NOT NULL, fetched_at INTEGER NOT NULL, publisher TEXT NOT NULL)`);
-    sql.exec("CREATE INDEX IF NOT EXISTS player_stats_age ON player_stats(fetched_at)");
+    // Every refresh rewrites fetched_at; an index on it doubled the row writes for an eviction that only runs at 10,000 records.
+    sql.exec("DROP INDEX IF EXISTS player_stats_age");
   }
 
   deleteSubjects(uuids: string[]): string[] {
@@ -72,12 +73,14 @@ export class SharedStats {
       "SELECT uuid, fetched_at FROM player_stats WHERE (uuid = ? OR name = ?) AND fetched_at > ?", record.uuid, record.name, now - STATS_TTL,
     ).toArray();
     if (existing.some(row => !ownRefresh || publisher !== record.uuid || row.uuid !== record.uuid || row.fetched_at >= record.fetchedAt)) return false;
-    this.sql.exec("DELETE FROM player_stats WHERE uuid = ? OR name = ?", record.uuid, record.name);
+    this.sql.exec("DELETE FROM player_stats WHERE name = ? AND uuid <> ?", record.name, record.uuid);
     // ponytail: bounded room cache; shard by UUID if the 128-player room limit is raised.
     if (this.sql.exec<{ total: number }>("SELECT COUNT(*) AS total FROM player_stats").one().total >= 10_000) {
       this.sql.exec("DELETE FROM player_stats WHERE uuid IN (SELECT uuid FROM player_stats ORDER BY fetched_at LIMIT 100)");
     }
-    this.sql.exec("INSERT INTO player_stats VALUES (?, ?, ?, ?, ?)", record.uuid, record.name, JSON.stringify(record.stats), record.fetchedAt, publisher);
+    // An in-place update writes one row; delete-and-insert also rewrote every index entry.
+    this.sql.exec(`INSERT INTO player_stats VALUES (?, ?, ?, ?, ?) ON CONFLICT(uuid) DO UPDATE SET
+      name = excluded.name, stats = excluded.stats, fetched_at = excluded.fetched_at, publisher = excluded.publisher`, record.uuid, record.name, JSON.stringify(record.stats), record.fetchedAt, publisher);
     return true;
   }
 }
