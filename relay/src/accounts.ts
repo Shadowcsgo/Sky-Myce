@@ -363,7 +363,7 @@ export class AccountStore extends DurableObject<AccountsConfig> {
     });
   }
   suppressCommunityRng(players: string[]) { this.ctx.storage.transactionSync(() => this.leaderboards.suppress(players)); }
-  acceptCommunityFeedNonce(nonce: string) { return this.ctx.storage.transactionSync(() => this.leaderboards.acceptNonce(nonce)); }
+  acceptCommunityFeedNonce(nonce: string, signedAt: number) { return this.leaderboards.acceptNonce(nonce, signedAt); }
   claimCommunityRng(channel: string, receipts?: FeedReceipt[]) { return this.ctx.storage.transactionSync(() => this.leaderboards.claim(channel, receipts)); }
   discordRecentRng(actor: DeveloperActor, channel: string) {
     if (actor.guildId !== this.env.DISCORD_GUILD_ID || channel !== this.env.DISCORD_RNG_CHANNEL_ID || !snowflake.test(actor.id) ||

@@ -45,16 +45,20 @@ type Hooks = { check(uuid: string, category: SharingCategory, at?: number): Shar
 
 /** One persistent global source serves the mod, Discord and future read-only consumers. */
 export class CommunityLeaderboards {
+  // The feed polls every 10-60 s; keeping its replay nonces and scan cursor in memory saves ~5 row writes per poll.
+  private readonly startedAt = Date.now();
+  private readonly nonces = new Map<string, number>();
+  private readonly cursors = new Map<string, string>();
   constructor(private sql: SqlStorage, private hooks: Hooks) {
     sql.exec(`CREATE TABLE IF NOT EXISTS community_rng_delivery(id TEXT PRIMARY KEY,author TEXT NOT NULL,event TEXT NOT NULL,
       received_at INTEGER NOT NULL,next_at INTEGER NOT NULL,attempts INTEGER NOT NULL,claim TEXT,claim_until INTEGER NOT NULL,
       channel TEXT,message_id TEXT,suppressed INTEGER NOT NULL DEFAULT 0);
       CREATE INDEX IF NOT EXISTS community_rng_delivery_due ON community_rng_delivery(next_at,claim_until);
       CREATE INDEX IF NOT EXISTS community_rng_delivery_author ON community_rng_delivery(author);
-      CREATE TABLE IF NOT EXISTS community_feed_nonces(nonce TEXT PRIMARY KEY,expires_at INTEGER NOT NULL);
+      DROP TABLE IF EXISTS community_feed_nonces;
       CREATE TABLE IF NOT EXISTS community_rng_sources(author TEXT NOT NULL,source_id TEXT NOT NULL,event_id TEXT NOT NULL,
         received_at INTEGER NOT NULL,PRIMARY KEY(author,source_id));
-      CREATE TABLE IF NOT EXISTS community_rng_scan(channel TEXT PRIMARY KEY,cursor TEXT NOT NULL);
+      DROP TABLE IF EXISTS community_rng_scan;
       CREATE INDEX IF NOT EXISTS community_rng_scan_order ON community_rng_delivery(channel,id) WHERE message_id IS NOT NULL AND suppressed=0`);
     sql.exec("CREATE INDEX IF NOT EXISTS community_rng_recent ON community_rng_delivery(channel,received_at DESC,id) WHERE message_id IS NOT NULL AND suppressed=0");
   }
@@ -221,20 +225,21 @@ export class CommunityLeaderboards {
     // A lost ACK may hide a posted message: expire publication, but retain attempted deliveries for cancellation.
     this.sql.exec("UPDATE community_rng_delivery SET suppressed=1,next_at=0 WHERE message_id IS NULL AND attempts>0 AND received_at<?", now - 600000);
     this.sql.exec("DELETE FROM community_rng_delivery WHERE message_id IS NULL AND attempts=0 AND (received_at<? OR suppressed=1) AND claim_until<=?", now - 600000, now);
-    this.sql.exec("DELETE FROM community_feed_nonces WHERE expires_at<=?", now);
+    for (const [nonce, expires] of this.nonces) if (expires <= now) this.nonces.delete(nonce);
   }
-  acceptNonce(nonce: string): boolean {
-    this.prune(); if (!/^[a-f0-9]{32}$/.test(nonce) || this.sql.exec("SELECT nonce FROM community_feed_nonces WHERE nonce=?", nonce).toArray().length) return false;
-    this.sql.exec("INSERT INTO community_feed_nonces VALUES(?,?)", nonce, Date.now() + 120000); return true;
+  /** A request signed before this instance started may repeat one only its predecessor remembered, so it is refused (the feed retries). */
+  acceptNonce(nonce: string, signedAt: number): boolean {
+    this.prune(); if (!/^[a-f0-9]{32}$/.test(nonce) || !(signedAt >= this.startedAt) || this.nonces.has(nonce)) return false;
+    this.nonces.set(nonce, Date.now() + 120000); return true;
   }
   private scanDelivered(channel: string): void {
-    const cursor = this.sql.exec<{ cursor: string }>("SELECT cursor FROM community_rng_scan WHERE channel=?", channel).toArray()[0]?.cursor ?? "";
+    const cursor = this.cursors.get(channel) ?? "";
     const selection = "SELECT * FROM community_rng_delivery WHERE channel=? AND message_id IS NOT NULL AND suppressed=0";
     const rows = this.sql.exec<FeedRow>(`${selection} AND id>? ORDER BY id LIMIT 100`, channel, cursor).toArray();
     if (rows.length < 100 && cursor) rows.push(...this.sql.exec<FeedRow>(`${selection} AND id<=? ORDER BY id LIMIT ?`, channel, cursor, 100 - rows.length).toArray());
-    if (!rows.length) { this.sql.exec("DELETE FROM community_rng_scan WHERE channel=?", channel); return; }
-    // Persist progress across polls/restarts, independently of retrying deletion claims.
-    this.sql.exec("INSERT INTO community_rng_scan VALUES(?,?) ON CONFLICT(channel) DO UPDATE SET cursor=excluded.cursor", channel, rows.at(-1)!.id);
+    if (!rows.length) { this.cursors.delete(channel); return; }
+    // Progress survives polls, independently of retrying deletion claims; a restart only rescans from the start.
+    this.cursors.set(channel, rows.at(-1)!.id);
     for (const row of rows) {
       const event = JSON.parse(row.event) as PublicRngEvent, decision = this.hooks.check(row.author, "rng", event.occurredAt);
       if (!decision.allowed || event.player !== "Anonymous" && !decision.publicName) this.sql.exec("UPDATE community_rng_delivery SET suppressed=1,next_at=0 WHERE id=?", row.id);
@@ -309,7 +314,7 @@ export async function handleCommunityFeed(request: Request, env: Config): Promis
     typeof receipt.id !== "string" || !/^[a-f0-9]{32}$/.test(receipt.id) || typeof receipt.messageId !== "string" || !/^\d{17,20}$/.test(receipt.messageId)) ||
     new Set(raw.receipts.map(receipt => receipt.id)).size !== raw.receipts.length)) return Response.json({ ok: false, error: "invalid_request" }, { status: 400 });
   const store = env.ACCOUNT_STORE.getByName("global");
-  if (!await store.acceptCommunityFeedNonce(nonce)) return Response.json({ ok: false, error: "request_replayed" }, { status: 409 });
+  if (!await store.acceptCommunityFeedNonce(nonce, Number(time))) return Response.json({ ok: false, error: "request_replayed" }, { status: 409 });
   const result = raw.action === "claim" ? await store.claimCommunityRng(env.DISCORD_RNG_CHANNEL_ID, raw.receipts as FeedReceipt[] | undefined) : raw.action === "ack" ? await store.acknowledgeCommunityRng(raw, env.DISCORD_RNG_CHANNEL_ID) : { ok: false, error: "invalid_request" };
   return Response.json(result, { status: result.ok ? 200 : 400, headers: { "Cache-Control": "no-store" } });
 }

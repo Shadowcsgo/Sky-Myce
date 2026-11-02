@@ -56,6 +56,7 @@ export class BazaarMarket {
   private snapshot: BazaarSnapshot | null;
   private retryAt = 0;
   private failures = 0;
+  private storedAt = 0;
   private mayor: { value: string; observedAt: number; retrievedAt: number } | null = null;
   private mayorRetryAt = 0;
   private mayorPending?: Promise<void>;
@@ -117,6 +118,10 @@ export class BazaarMarket {
       this.retryAt = now + 30000; this.failures = 0;
       // Identical upstream timestamps do not generate another snapshot or history write.
       if (snapshot.observedAt === this.snapshot?.observedAt) { this.snapshot.retrievedAt = now; return; }
+      this.snapshot = snapshot;
+      // Refreshes run every 30 s while anyone trades; storing every 5 minutes keeps row writes low and history close to hourly closes.
+      if (now - this.storedAt < 300_000) return;
+      this.storedAt = now;
       const compact = JSON.stringify({ observedAt: snapshot.observedAt, prices: Object.fromEntries(snapshot.products.map(p => [p.id, [p.buyPrice, p.sellPrice]])), mayor: this.mayor?.value ?? null, mayorObservedAt: this.mayor?.observedAt ?? 0 });
       this.sql.exec("INSERT INTO community_bazaar_market VALUES(1,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data", serialized);
       // At most 72 hourly and 366 daily closing observations, shared by every player; no personal history.
@@ -125,7 +130,6 @@ export class BazaarMarket {
         this.sql.exec("INSERT INTO community_bazaar_history VALUES(?,?,?) ON CONFLICT(bucket,at) DO UPDATE SET data=excluded.data", bucket, at, compact);
         this.sql.exec("DELETE FROM community_bazaar_history WHERE bucket=? AND at<?", bucket, at - (count - 1) * interval);
       }
-      this.snapshot = snapshot;
     } catch { this.retryAt = now + Math.min(1800000, 30000 * 2 ** Math.min(this.failures++, 6)); }
   }
   history(product: string, daily: boolean) {

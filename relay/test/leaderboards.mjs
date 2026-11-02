@@ -37,7 +37,7 @@ const source = `import {DurableObject} from 'cloudflare:workers';
   deliveredBatch(oldest,others,named=false){for(let index=1;index<=205;index++)this.delivered(index===1?oldest:others,index,index===1&&named)}
   flagDelivery(index){this.sql.exec('UPDATE community_rng_delivery SET suppressed=1,next_at=0 WHERE id=?',index.toString(16).padStart(32,'0'))}
   async communityLeaderboard(token,query){return token==='t'.repeat(43)?this.boards.query(query):{ok:false,error:'session_expired'}}
-  acceptCommunityFeedNonce(nonce){return this.boards.acceptNonce(nonce)}
+  acceptCommunityFeedNonce(nonce,signedAt){return this.boards.acceptNonce(nonce,signedAt)}
   claimCommunityRng(channel,receipts){return this.boards.claim(channel,receipts)}
   acknowledgeCommunityRng(raw,channel){return this.boards.acknowledge(raw,channel)}
  }
@@ -122,6 +122,7 @@ try {
  assert.equal(deliveries[0].event.rarity,'LEGENDARY');assert.equal(deliveries[0].event.displayName,"Necron's Handle");assert.equal(deliveries[0].event.floor,'F7');
  assert.ok(!JSON.stringify(deliveries).includes(c),'Private UUID never leaves the feed bridge');
  const replay=await mf.dispatchFetch('https://fixture.example/discord/community-feed',{method:'POST',body:claimed.body,headers:claimed.headers});assert.equal(replay.status,409);
+ assert.equal(await store.acceptCommunityFeedNonce('e'.repeat(32),Date.now()-120000),false,'A nonce signed before the store started may be one its predecessor saw, so it is refused');
  const tampered=await mf.dispatchFetch('https://fixture.example/discord/community-feed',{method:'POST',body:claimed.body.replace('claim','ack'),headers:claimed.headers});assert.equal(tampered.status,401);
  await store.policy(c,{rng:false});
  const ack=await request({action:'ack',id:deliveries[0].id,claim:deliveries[0].claim,operation:'publish',messageId:'44444444444444444'});assert.equal((await ack.response.json()).deleteRequired,true,'Consent changed in flight triggers removal');
