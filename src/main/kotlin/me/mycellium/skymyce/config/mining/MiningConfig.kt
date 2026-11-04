@@ -39,6 +39,11 @@ object MiningConfig : CategoryKt("Mining") {
         description = TranslatableValue.literal("Highlights what your open commissions need: the ore or gemstone blocks around you, and the mobs for slayer commissions, including Glacite mobs in Mineshafts")
     }
 
+    val gemstoneWool by boolean(false) {
+        name = TranslatableValue.literal("Wool Gemstones")
+        description = TranslatableValue.literal("Draws gemstone glass and panes as solid wool of the same color in the Crystal Hollows, Dwarven Mines and Mineshafts, so they are easier to see. Only the look changes: a pane still has its thin hitbox")
+    }
+
     val spreadPredictor by boolean(false) {
         name = TranslatableValue.literal("Mining Spread Predictor")
         description = TranslatableValue.literal("After you break an ore or gemstone with a pickaxe or drill, flashes the blocks your Mining Spread took and outlines the best block to mine next. Taps that don't break a block, stone and Hard Stone are ignored; off in the Catacombs")

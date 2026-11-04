@@ -11,8 +11,10 @@ import me.mycellium.skymyce.utils.AtomicJsonFile
 import me.mycellium.skymyce.utils.StateWriter
 import me.mycellium.skymyce.utils.Utils
 import net.minecraft.core.registries.BuiltInRegistries
+import net.minecraft.resources.Identifier
 import net.minecraft.world.level.block.Block
 import net.minecraft.world.level.block.Blocks
+import net.minecraft.world.level.block.state.BlockState
 import tech.thatgravyboat.skyblockapi.utils.Scheduling
 import me.mycellium.skymyce.hud.HudTheme
 import me.mycellium.skymyce.hud.hudPanel
@@ -128,6 +130,27 @@ object MiningFeatures : SkyMyceModule() {
     private var commissionBlocks: List<BlockPos> = emptyList()
     private var commissionMobs: List<Entity> = emptyList()
     private var ticks = 0
+    /** Read from chunk-build threads through [gemstoneLook]. */
+    @Volatile private var gemstoneWool = false
+    private val GEMSTONE_ISLANDS = setOf(SkyBlockIsland.CRYSTAL_HOLLOWS, SkyBlockIsland.DWARVEN_MINES, SkyBlockIsland.MINESHAFT)
+    private val GEMSTONE_WOOL by lazy {
+        fun block(name: String) = BuiltInRegistries.BLOCK.getValue(Identifier.withDefaultNamespace(name))
+        // Written out because SkyBlockAPI files Jasper under brown, while the Fairy Grotto's Jasper is magenta.
+        listOf("red", "light_blue", "lime", "orange", "purple", "yellow", "magenta", "white", "green", "brown", "black", "blue").flatMap { colour ->
+            val wool = block("${colour}_wool").defaultBlockState()
+            listOf(block("${colour}_stained_glass") to wool, block("${colour}_stained_glass_pane") to wool)
+        }.toMap()
+    }
+
+    fun gemstoneLook(state: BlockState) = if (gemstoneWool) GEMSTONE_WOOL[state.block] ?: state else state
+
+    private fun updateGemstoneWool() {
+        if (MC.instance.level == null) return
+        val wanted = MiningConfig.gemstoneWool && LocationAPI.island in GEMSTONE_ISLANDS
+        if (wanted == gemstoneWool) return
+        gemstoneWool = wanted
+        MC.instance.levelRenderer.allChanged()
+    }
 
     @Subscription
     fun onTabWidget(event: TabWidgetChangeEvent) {
@@ -139,6 +162,7 @@ object MiningFeatures : SkyMyceModule() {
     @Subscription
     fun onTick(event: TickEvent) {
         ticks++
+        updateGemstoneWool()
         if (MiningConfig.spreadPredictor) predictSpread() else { nextBlock = null; mining = null; spreadBurst = null }
         // The commission scan covers ~35k blocks, so it refreshes once a second; Pickobulus ranks the same blocks.
         val blocksWanted = MiningConfig.commissionHighlight || MiningConfig.pickobulusHelper

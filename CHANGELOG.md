@@ -3,6 +3,9 @@
 Newest first. Every release gets a `## <version> (<date>)` section with one line per change you can see in game. The
 Daily Digest shows this whole file, the update prompt shows the section for the new version, and a copy goes to Discord.
 
+## 2.8.0-beta-048 (2026-11-04)
+- Wool Gemstones (off by default, under Mining): gemstone glass and glass panes in the Crystal Hollows, Dwarven Mines and Mineshafts are drawn as solid wool of the same colour so they stand out. Only the look changes; a pane still has its thin hitbox.
+
 ## 2.8.0-beta-047 (2026-11-02)
 - Custom names now wrap in chat and in the NPC dialogue box instead of running off the edge, and the box no longer shows them twice.
 - The menu takes up much less space: a slimmer sidebar, smaller Home tiles, each feature on one line with its on/off switch, and each feature's settings as divided rows in a single panel.

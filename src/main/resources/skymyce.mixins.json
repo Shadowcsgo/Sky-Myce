@@ -48,7 +48,8 @@
     "SkijaMenuRenderMixin",
     "BazaarAssistSignAccessor",
     "SignEnterConfirmMixin",
-    "BazaarAssistContainerAccessor"
+    "BazaarAssistContainerAccessor",
+    "GemstoneWoolMixin"
   ],
   "injectors": {
     "defaultRequire": 1
