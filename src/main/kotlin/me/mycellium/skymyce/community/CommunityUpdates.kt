@@ -56,6 +56,7 @@ object CommunityUpdates {
     fun initialize() {
         val saved = runCatching { preferences.read() }.getOrDefault(CommunityUpdatePreferences())
         deferred = saved.deferredVersion; autoUpdate = saved.autoUpdate
+        removeOldUpdateFiles(directory)
         directory.resolve("result.txt").takeIf(Files::isRegularFile)?.let { result ->
             status = runCatching { Files.newInputStream(result).use { it.readNBytes(1024).toString(Charsets.UTF_8).trim() } }.getOrDefault(status)
         }
@@ -272,6 +273,12 @@ object CommunityUpdates {
         } catch (error: Exception) { if (downloaded) Files.deleteIfExists(next); throw error }
         finally { response.body().close() }
     }
+}
+
+/** Reaching this means the installed version started, so the installer's rollback copy and any unused downloads have no further purpose. */
+internal fun removeOldUpdateFiles(directory: Path) {
+    if (!Files.isDirectory(directory)) return
+    runCatching { Files.newDirectoryStream(directory, "{*.backup,Sky-Myce-*.jar}").use { files -> files.forEach { runCatching { Files.delete(it) } } } }
 }
 
 internal const val MAX_COMMUNITY_JAR = 128L * 1024 * 1024

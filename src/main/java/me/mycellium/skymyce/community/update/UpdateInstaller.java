@@ -74,7 +74,7 @@ public final class UpdateInstaller {
                         try { install(plan); break; }
                         catch (FileSystemException locked) { if (attempt == 19) throw locked; Thread.sleep(250); }
                     }
-                    Files.writeString(planPath.resolveSibling("result.txt"), "Update installed. The previous JAR is retained in .sky-myce-updates.\n");
+                    Files.writeString(planPath.resolveSibling("result.txt"), "Update installed.\n");
                 }
                 return null;
             });

@@ -10,6 +10,7 @@ Daily Digest shows this whole file, the update prompt shows the section for the 
 - The Pickobulus marker looks better: the outline glides to a new spot and gently pulses, and the blocks ripple in from the centre with a soft wave. Both follow the Animations setting.
 - New Pickobulus Color setting changes the colour of the marker, blocks, arrow and label. Settings now have a colour picker for this.
 - New XP Per Hour widget (under General, off by default): estimated HOTM XP and Skill XP per hour over the last 10 minutes. HOTM XP counts rewards shown in chat and commissions you claim.
+- Updating no longer keeps old copies of the mod. Once the new version has started, the old one is deleted from the .sky-myce-updates folder in your game directory, along with copies left by earlier updates and unused downloads, which frees up disk space.
 
 ## 2.8.0-beta-048 (2026-11-04)
 - Wool Gemstones (off by default, under Mining): gemstone glass and glass panes in the Crystal Hollows, Dwarven Mines and Mineshafts are drawn as solid wool of the same colour so they stand out. Only the look changes; a pane still has its thin hitbox.

@@ -85,6 +85,11 @@ fun main() {
     process.outputStream.close()
     check(process.waitFor(10, TimeUnit.SECONDS) && process.exitValue() == 0)
     check(Files.readString(target) == "new verified version" && Files.readString(backup) == "working version" && !Files.exists(next))
+    val leftovers = Files.createDirectories(root.resolve("leftovers"))
+    val kept = listOf("preferences.json", "update-helper.jar", "result.txt").map { Files.writeString(leftovers.resolve(it), "kept") }
+    val removed = listOf("Sky-Myce.jar.1.backup", "Sky-Myce-2.8.0-beta-018-abc.jar").map { Files.writeString(leftovers.resolve(it), "old") }
+    removeOldUpdateFiles(leftovers); removeOldUpdateFiles(root.resolve("absent"))
+    check(kept.all(Files::exists) && removed.none(Files::exists))
     communityRestartChecks(root.resolve("restart"), helper)
     checkRestartNatives(root.resolve("native-restart"))
     println("Community checks passed: authenticated releases, persistent private sessions, bounded HTTP body deadlines, device normalization and after-exit atomic update refusal/backup safety")
