@@ -9,6 +9,8 @@ import me.mycellium.skymyce.features.general.overlays.isOptionsLine
 import me.mycellium.skymyce.features.general.overlays.optionsFrom
 import me.mycellium.skymyce.features.general.overlays.parseNpcLine
 import me.mycellium.skymyce.features.general.overlays.revealedChars
+import me.mycellium.skymyce.features.general.overlays.HourlyRate
+import me.mycellium.skymyce.features.general.overlays.hotmXpReward
 import me.mycellium.skymyce.features.general.overlays.skillProgress
 import net.minecraft.network.chat.ClickEvent
 
@@ -146,6 +148,11 @@ private fun checkMotion() {
 }
 
 private fun checkSkillAndDialogue() {
+    check(hotmXpReward("    +1,400 HOTM Experience") == 1400.0 && hotmXpReward("Player: +5 HOTM Experience") == null)
+    val rate = HourlyRate(600_000)
+    check(rate.perHour(0) == null)
+    rate.add(100.0, 0)
+    check(rate.perHour(30_000) == 6000.0 && rate.perHour(120_000) == 3000.0 && rate.perHour(601_000) == null)
     check(skillProgress(42.5f, null, null) == 0.425 && skillProgress(null, 250, 1000) == 0.25 && skillProgress(null, null, null) == null)
     check(skillProgress(null, 5, 0) == null && skillProgress(150f, null, null) == 1.0)
     check(parseNpcLine("[NPC] Elle: Hello there, adventurer!")?.let { it.name == "Elle" && it.message == "Hello there, adventurer!" } == true)

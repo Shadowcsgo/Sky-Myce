@@ -46,6 +46,11 @@ object GeneralConfig : CategoryKt("General") {
         description = TranslatableValue.literal("Display Skill XP on your screen")
     }
 
+    val xpPerHour by boolean(false) {
+        name = TranslatableValue.literal("XP Per Hour")
+        description = TranslatableValue.literal("A widget with your estimated HOTM XP and Skill XP per hour over the last 10 minutes. HOTM XP counts rewards you see in chat and commissions you claim")
+    }
+
     val displayXpBar by boolean(true) {
         name = TranslatableValue.literal("Skill XP Progress Bar")
         description = TranslatableValue.literal("Show a bar under the skill XP display with your progress to the next level. Hypixel sends a percentage or current/needed XP; skills at max level show no bar")

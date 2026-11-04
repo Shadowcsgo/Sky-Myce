@@ -40,6 +40,22 @@ fun main() {
     val sealed = setOf(target, wall, BlockPos(1, 1, 0), BlockPos(-1, 1, 0), BlockPos(0, 2, 0), BlockPos(0, 0, 0))
     check(!canSee(eye, target) { it !in sealed })
 
+    // A pane's texture coordinates land in the same relative spot on the wool sprite.
+    check(kotlin.math.abs(remapUv(0.25f, 0.2f, 0.3f, 0.5f, 0.7f) - 0.6f) < 1e-5f)
+
+    // Looking south (+z), right is west (-x). A target behind you or past the screen edge gets an arrow; one ahead does not.
+    val south = net.minecraft.world.phys.Vec3(0.0, 0.0, 1.0)
+    fun arrow(x: Double, y: Double, z: Double) = offScreenArrow(net.minecraft.world.phys.Vec3(x, y, z), south, 1.0, 0.6)
+    check(arrow(0.5, 0.0, 10.0) == null)
+    check(arrow(-20.0, 0.0, 1.0) == "→" && arrow(20.0, 0.0, 1.0) == "←")
+    check(arrow(0.0, 20.0, 1.0) == "↑" && arrow(0.0, -20.0, 1.0) == "↓")
+    check(arrow(0.0, 0.0, -5.0) != null)
+
+    // Blocks ripple in from the centre; with animations off they simply show.
+    check(blastHitAlpha(3.0, 0.0, 3, me.mycellium.skymyce.ui.GuiMotion.MEDIUM) == 0)
+    check(blastHitAlpha(0.0, 0.5, 3, me.mycellium.skymyce.ui.GuiMotion.REDUCED) == 18)
+    check(blastHitAlpha(3.0, 0.0, 3, me.mycellium.skymyce.ui.GuiMotion.OFF) == 25)
+
     val cluster = listOf(BlockPos(0, 0, 0), BlockPos(1, 0, 0), BlockPos(0, 1, 0), BlockPos(10, 0, 0))
     val ranked = rankBlastCentres(cluster, 2)
     check(ranked.first().second == 3 && ranked.first().first != BlockPos(10, 0, 0) && ranked.last() == (BlockPos(10, 0, 0) to 1))

@@ -10,7 +10,17 @@ import me.mycellium.skymyce.config.mining.MiningConfig
 import me.mycellium.skymyce.utils.AtomicJsonFile
 import me.mycellium.skymyce.utils.StateWriter
 import me.mycellium.skymyce.utils.Utils
+import net.minecraft.client.model.geom.builders.UVPair
+import net.minecraft.client.renderer.block.BlockStateModelSet
+import net.minecraft.client.renderer.block.dispatch.BlockStateModel
+import net.minecraft.client.renderer.block.dispatch.BlockStateModelPart
+import net.minecraft.client.renderer.block.dispatch.SingleVariant
+import net.minecraft.client.resources.model.SimpleModelWrapper
+import net.minecraft.client.resources.model.geometry.BakedQuad
+import net.minecraft.client.resources.model.geometry.QuadCollection
 import net.minecraft.core.registries.BuiltInRegistries
+import net.minecraft.util.RandomSource
+import net.minecraft.world.level.block.StainedGlassPaneBlock
 import net.minecraft.resources.Identifier
 import net.minecraft.world.level.block.Block
 import net.minecraft.world.level.block.Blocks
@@ -49,6 +59,7 @@ import tech.thatgravyboat.skyblockapi.api.location.LocationAPI
 import tech.thatgravyboat.skyblockapi.api.location.SkyBlockIsland
 import tech.thatgravyboat.skyblockapi.api.profile.party.PartyAPI
 import tech.thatgravyboat.skyblockapi.utils.Scheduling.schedule
+import tech.thatgravyboat.skyblockapi.utils.extentions.getRawLore
 import tech.thatgravyboat.skyblockapi.api.data.SkyBlockCategory
 import tech.thatgravyboat.skyblockapi.api.datatype.DataTypes
 import tech.thatgravyboat.skyblockapi.api.datatype.getData
@@ -58,7 +69,11 @@ import net.minecraft.world.entity.Entity
 import net.minecraft.world.entity.LivingEntity
 import net.minecraft.world.entity.decoration.ArmorStand
 import net.minecraft.world.entity.player.Player
+import kotlin.math.abs
+import kotlin.math.atan2
 import kotlin.math.ceil
+import kotlin.math.sin
+import kotlin.math.sqrt
 import kotlin.math.atan
 import kotlin.math.cos
 import kotlin.math.tan
@@ -109,7 +124,6 @@ object MiningFeatures : SkyMyceModule() {
     }
 
     private const val SPREAD_COLOR = 0x55FFFF
-    private const val BLAST_COLOR = 0xFFAA00
     private const val COMMISSION_COLOR = 0xFFD54F
     private const val MOB_COLOR = 0xFF5555
     /** Horizontal and vertical reach of the once-a-second commission block scan (~35k blocks). */
@@ -127,6 +141,20 @@ object MiningFeatures : SkyMyceModule() {
     private var spreadBurst: Pair<List<BlockPos>, Long>? = null
     private class Blast(val centre: BlockPos, val hits: List<BlockPos>, val reachable: Boolean)
     private var blast: Blast? = null
+    private var blastFrom: BlockPos? = null
+    private var blastShownAt = 0L
+    private val blastDirectionContent by lazy { hudPanel(decorated = false) }
+
+    /** Keeps pointing at the spot once it is off screen, which the marks in the world cannot do. */
+    val blastDirectionWidget = Widget("pickobulus_direction", "Pickobulus Direction", 480, 230, 1f, Anchor.CENTER) {
+        val b = blast ?: return@Widget null
+        val player = MC.instance.player ?: return@Widget null
+        val toSpot = Vec3.atCenterOf(b.centre).subtract(player.eyePosition)
+        val halfHeight = tan(Math.toRadians(MC.instance.options.fov().get() / 2.0))
+        val window = MC.instance.window
+        val arrow = offScreenArrow(toSpot, player.lookAngle, halfHeight * window.width / window.height.coerceAtLeast(1), halfHeight) ?: return@Widget null
+        blastDirectionContent.updateTextLines(listOf("§6$arrow §7Pickobulus · ~${b.hits.size} blocks · ${toSpot.length().toInt()}m"))
+    }
     private var commissionBlocks: List<BlockPos> = emptyList()
     private var commissionMobs: List<Entity> = emptyList()
     private var ticks = 0
@@ -142,7 +170,30 @@ object MiningFeatures : SkyMyceModule() {
         }.toMap()
     }
 
-    fun gemstoneLook(state: BlockState) = if (gemstoneWool) GEMSTONE_WOOL[state.block] ?: state else state
+    /** Glass becomes the wool model; a pane keeps its own shape and only takes on the wool texture. */
+    fun gemstoneModel(state: BlockState, original: BlockStateModel, models: BlockStateModelSet, panes: MutableMap<BlockState, BlockStateModel>): BlockStateModel {
+        if (!gemstoneWool) return original
+        val wool = models.get(GEMSTONE_WOOL[state.block] ?: return original)
+        return if (state.block is StainedGlassPaneBlock) panes.computeIfAbsent(state) { woolPane(original, wool) } else wool
+    }
+
+    private fun woolPane(pane: BlockStateModel, wool: BlockStateModel): BlockStateModel {
+        val random = RandomSource.create()
+        val woolPart = ArrayList<BlockStateModelPart>().also { wool.collectParts(random, it) }.firstOrNull() ?: return pane
+        val material = Direction.entries.firstNotNullOfOrNull { woolPart.getQuads(it).firstOrNull() }?.materialInfo() ?: return pane
+        val to = material.sprite()
+        fun retexture(quad: BakedQuad): BakedQuad {
+            val from = quad.materialInfo().sprite()
+            fun uv(packed: Long) = UVPair.pack(remapUv(UVPair.unpackU(packed), from.u0, from.u1, to.u0, to.u1), remapUv(UVPair.unpackV(packed), from.v0, from.v1, to.v0, to.v1))
+            return BakedQuad(quad.position0(), quad.position1(), quad.position2(), quad.position3(), uv(quad.packedUV0()), uv(quad.packedUV1()), uv(quad.packedUV2()), uv(quad.packedUV3()), quad.direction(), material)
+        }
+        val quads = QuadCollection.Builder()
+        ArrayList<BlockStateModelPart>().also { pane.collectParts(random, it) }.forEach { part ->
+            Direction.entries.forEach { side -> part.getQuads(side).forEach { quads.addCulledFace(side, retexture(it)) } }
+            part.getQuads(null).forEach { quads.addUnculledFace(retexture(it)) }
+        }
+        return SingleVariant(SimpleModelWrapper(quads.build(), woolPart.useAmbientOcclusion(), woolPart.particleMaterial()))
+    }
 
     private fun updateGemstoneWool() {
         if (MC.instance.level == null) return
@@ -165,9 +216,10 @@ object MiningFeatures : SkyMyceModule() {
         updateGemstoneWool()
         if (MiningConfig.spreadPredictor) predictSpread() else { nextBlock = null; mining = null; spreadBurst = null }
         // The commission scan covers ~35k blocks, so it refreshes once a second; Pickobulus ranks the same blocks.
-        val blocksWanted = MiningConfig.commissionHighlight || MiningConfig.pickobulusHelper
+        val picko = MiningConfig.pickobulusHelper && pickobulusHeld()
+        val blocksWanted = MiningConfig.commissionHighlight || picko
         if (!blocksWanted) commissionBlocks = emptyList() else if (ticks % 20 == 0) commissionBlocks = scanCommissionBlocks()
-        if (!MiningConfig.pickobulusHelper) blast = null else if (ticks % 20 == 0) blast = findBlast()
+        if (!picko) blast = null else if (ticks % 20 == 0) blast = findBlast()
         if (!MiningConfig.commissionHighlight) commissionMobs = emptyList() else if (ticks % 5 == 0) commissionMobs = findCommissionMobs()
         if (Config.devMode && MiningConfig.recordSpread) recordSpread() else { snapshot = null; pending = null }
     }
@@ -252,6 +304,9 @@ object MiningFeatures : SkyMyceModule() {
         return category == SkyBlockCategory.PICKAXE || category == SkyBlockCategory.DRILL
     }
 
+    /** Hypixel lists the selected pickaxe ability on the tool, so this is false for anyone on Mining Speed Boost or similar. */
+    private fun pickobulusHeld() = miningToolHeld() && MC.instance.player?.mainHandItem?.getRawLore().orEmpty().any { "Ability: Pickobulus" in it }
+
     private fun predictSpread() {
         val level = MC.instance.level ?: return
         nextBlock = nextBlock?.takeIf { (pos, type) -> level.getBlockState(pos).block in type.blocks }
@@ -325,7 +380,7 @@ object MiningFeatures : SkyMyceModule() {
     private fun findBlast(): Blast? {
         val level = MC.instance.level ?: return null
         val player = MC.instance.player ?: return null
-        if (!miningToolHeld() || commissionBlocks.isEmpty()) return null
+        if (commissionBlocks.isEmpty()) return null
         val eye = player.eyePosition
         val radius = MiningConfig.pickobulusRadius
         val ranked = rankBlastCentres(commissionBlocks, radius)
@@ -337,6 +392,7 @@ object MiningFeatures : SkyMyceModule() {
                 level.clip(ClipContext(eye, Vec3.atCenterOf(pos), ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, player)).blockPos == pos
         }
         val centre = (reachable ?: best).first
+        if (centre != blast?.centre) { blastFrom = blast?.centre; blastShownAt = System.nanoTime() }
         return Blast(centre, commissionBlocks.filter { it.distSqr(centre) <= radius * radius }, reachable != null)
     }
 
@@ -386,20 +442,31 @@ object MiningFeatures : SkyMyceModule() {
                 Gizmos.cuboid(AABB(it).inflate(0.004 + 0.12 * (1 - ease)), GizmoStyle.stroke(HudTheme.alpha(SPREAD_COLOR, (40 + 60 * ease).toInt()), 3f)).setAlwaysOnTop()
             }
             blast?.let { b ->
-                val label = "Pickobulus · ~${b.hits.size} blocks"
+                val colour = MiningConfig.pickobulusColor and 0xFFFFFF
+                val seconds = (now - blastShownAt) / 1e9
+                val moving = mode != GuiMotion.OFF
+                // The marker glides to a new spot instead of jumping, and breathes gently once it is there.
+                val glide = if (moving) (seconds / 0.2).coerceIn(0.0, 1.0).let { 1 - (1 - it) * (1 - it) } else 1.0
+                val from = Vec3.atLowerCornerOf(blastFrom ?: b.centre)
+                val at = from.add(Vec3.atLowerCornerOf(b.centre).subtract(from).scale(glide))
+                val breathe = if (moving && mode != GuiMotion.REDUCED) 0.5 + 0.5 * sin(seconds * 3.0) else 0.0
+                val marker = AABB(at, at.add(1.0, 1.0, 1.0)).inflate(0.004 + 0.035 * breathe)
+                Gizmos.cuboid(marker, GizmoStyle.stroke(HudTheme.alpha(colour, (75 + 25 * breathe).toInt()), 3f)).setAlwaysOnTop()
+                val label = Vec3.atCenterOf(b.centre).add(0.0, 0.9, 0.0)
                 if (b.reachable) {
-                    b.hits.forEach { Gizmos.cuboid(AABB(it).inflate(0.002), GizmoStyle.fill(HudTheme.alpha(BLAST_COLOR, 25))) }
-                    Gizmos.cuboid(AABB(b.centre).inflate(0.004), GizmoStyle.stroke(HudTheme.alpha(BLAST_COLOR, 100), 3f)).setAlwaysOnTop()
-                    Gizmos.billboardText(label, Vec3.atCenterOf(b.centre).add(0.0, 0.9, 0.0),
-                        TextGizmo.Style.forColorAndCentered(HudTheme.alpha(BLAST_COLOR, 100)).withScale(0.4f)).setAlwaysOnTop()
+                    b.hits.forEach {
+                        val alpha = blastHitAlpha(sqrt(it.distSqr(b.centre)), seconds, MiningConfig.pickobulusRadius, mode)
+                        if (alpha > 0) Gizmos.cuboid(AABB(it).inflate(0.002), GizmoStyle.fill(HudTheme.alpha(colour, alpha)))
+                    }
+                    Gizmos.billboardText("Pickobulus · ~${b.hits.size} blocks", label,
+                        TextGizmo.Style.forColorAndCentered(HudTheme.alpha(colour, 100)).withScale(0.4f)).setAlwaysOnTop()
                 } else MC.instance.player?.let { player ->
                     // Out of reach or hidden: point the way from just in front of you to the best vein.
                     val target = Vec3.atCenterOf(b.centre)
                     val start = player.eyePosition.add(player.lookAngle.scale(1.2)).add(0.0, -0.4, 0.0)
-                    Gizmos.arrow(start, target, HudTheme.alpha(BLAST_COLOR, 85), 2f).setAlwaysOnTop()
-                    Gizmos.cuboid(AABB(b.centre).inflate(0.004), GizmoStyle.stroke(HudTheme.alpha(BLAST_COLOR, 100), 3f)).setAlwaysOnTop()
-                    Gizmos.billboardText("Best vein · ~${b.hits.size} blocks · ${target.distanceTo(player.eyePosition).toInt()}m", target.add(0.0, 0.9, 0.0),
-                        TextGizmo.Style.forColorAndCentered(HudTheme.alpha(BLAST_COLOR, 100)).withScale(0.5f)).setAlwaysOnTop()
+                    Gizmos.arrow(start, target, HudTheme.alpha(colour, (65 + 25 * breathe).toInt()), 2f).setAlwaysOnTop()
+                    Gizmos.billboardText("Best vein · ~${b.hits.size} blocks · ${target.distanceTo(player.eyePosition).toInt()}m", label,
+                        TextGizmo.Style.forColorAndCentered(HudTheme.alpha(colour, 100)).withScale(0.5f)).setAlwaysOnTop()
                 }
             }
         }
@@ -468,6 +535,28 @@ internal fun parseStat(lines: List<String>, stat: String) =
 internal fun collectorOre(name: String) = name.takeIf { it.endsWith("Collector") }?.substringBefore(' ')?.uppercase()
 
 /** Mining Spread works on ores and gemstones; stone and Hard Stone are only ever broken by hand. */
+/** Maps one texture coordinate from one atlas sprite's range to another's. */
+internal fun remapUv(value: Float, from0: Float, from1: Float, to0: Float, to1: Float) = to0 + (value - from0) / (from1 - from0) * (to1 - to0)
+
+/** Null when the target is on screen, otherwise the arrow toward it relative to where you look. */
+internal fun offScreenArrow(toTarget: Vec3, look: Vec3, halfWidthTan: Double, halfHeightTan: Double): String? {
+    val right = look.cross(Vec3(0.0, 1.0, 0.0)).normalize()
+    val up = right.cross(look)
+    val x = toTarget.dot(right)
+    val y = toTarget.dot(up)
+    val z = toTarget.dot(look)
+    if (z > 0 && abs(x) <= z * halfWidthTan && abs(y) <= z * halfHeightTan) return null
+    return "↑↗→↘↓↙←↖"[Math.floorMod(Math.round(atan2(x, y) / (Math.PI / 4)).toInt(), 8)].toString()
+}
+
+/** Blast blocks ripple in from the centre, then a soft wave keeps travelling outward so the radius reads at a glance. */
+internal fun blastHitAlpha(distance: Double, seconds: Double, radius: Int, mode: GuiMotion): Int {
+    if (mode == GuiMotion.OFF) return 25
+    val appear = ((seconds - distance * 0.05) / 0.2).coerceIn(0.0, 1.0)
+    val wave = if (mode == GuiMotion.REDUCED) 0.0 else (1 - abs(distance - seconds % 1.6 / 1.6 * (radius + 1))).coerceAtLeast(0.0)
+    return ((18 + 22 * wave) * appear).toInt()
+}
+
 internal fun spreadApplies(family: MiningBlockFamily) = family != MiningBlockFamily.VANILLA_BLOCKS && family != MiningBlockFamily.HARD_STONE
 
 /** What a commission asks for: ore names in [MiningBlock] naming ("MITHRIL", "RUBY", "GEMSTONE" = any gemstone) or mob name parts. */

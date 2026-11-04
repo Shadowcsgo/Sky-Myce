@@ -585,7 +585,7 @@ class MenuCatalog(rows: List<SettingRow>) {
                 path.startsWith("General/Loadout Keybinds/") -> "loadouts"
                 path == "General/autoRefill" -> "auto-refill"
                 path == "General/displayAbilityCooldown" || path == "General/displayAbilityNotification" -> "ability-cooldowns"
-                path == "General/clientInfo" || path == "General/displayXp" || path == "General/displayXpBar" -> "information"
+                path == "General/clientInfo" || path == "General/displayXp" || path == "General/displayXpBar" || path == "General/xpPerHour" -> "information"
                 path == "Theme & Appearance/graphicsQuality" -> "settings-graphics"
                 path == "Theme & Appearance/motion" -> "settings-motion"
                 path.startsWith("Theme & Appearance/") -> "settings-appearance"

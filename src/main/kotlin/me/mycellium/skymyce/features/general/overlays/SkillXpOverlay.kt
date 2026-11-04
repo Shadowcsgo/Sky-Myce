@@ -13,6 +13,9 @@ import me.mycellium.skymyce.features.general.overlays.bars.BarMotion
 import me.mycellium.skymyce.features.general.overlays.bars.StatusBarRenderer
 import me.mycellium.skymyce.hud.HudTheme
 import me.mycellium.skymyce.hud.hudLabel
+import me.mycellium.skymyce.hud.hudPanel
+import me.mycellium.skymyce.hud.updateTextLines
+import me.mycellium.skymyce.utils.NumberUtils
 import me.mycellium.skymyce.hud.updateText
 import me.mycellium.skymyce.hud.widget.Anchor
 import me.mycellium.skymyce.hud.widget.Widget
@@ -20,6 +23,10 @@ import net.minecraft.world.item.Item
 import net.minecraft.world.item.ItemStack
 import net.minecraft.world.item.Items
 import tech.thatgravyboat.skyblockapi.api.events.base.Subscription
+import tech.thatgravyboat.skyblockapi.api.events.chat.ChatReceivedEvent
+import tech.thatgravyboat.skyblockapi.api.events.hypixel.SkillExpGainedEvent
+import tech.thatgravyboat.skyblockapi.api.events.screen.InventoryChangeEvent
+import tech.thatgravyboat.skyblockapi.utils.extentions.getRawLore
 import tech.thatgravyboat.skyblockapi.api.events.info.ActionBarWidget
 import tech.thatgravyboat.skyblockapi.api.events.info.ActionBarWidgetChangeEvent
 import tech.thatgravyboat.skyblockapi.api.events.info.RenderActionBarWidgetEvent
@@ -40,7 +47,63 @@ internal fun skillProgress(percent: Float?, current: Long?, needed: Long?): Doub
     else -> null
 }
 
+/** Gains over the last [windowMs], scaled to an hour; the rate counts from the first gain still in the window, at least a minute. */
+internal class HourlyRate(private val windowMs: Long = 600_000) {
+    private val gains = ArrayDeque<Pair<Long, Double>>()
+
+    fun add(amount: Double, now: Long) { gains.addLast(now to amount) }
+
+    /** Null once nothing has been gained for the whole window, so idle skills drop off the widget. */
+    fun perHour(now: Long): Double? {
+        while (gains.isNotEmpty() && now - gains.first().first > windowMs) gains.removeFirst()
+        val first = gains.firstOrNull() ?: return null
+        return gains.sumOf { it.second } / (now - first.first).coerceAtLeast(60_000) * 3_600_000
+    }
+}
+
+/** The amount from a reward line such as "+400 HOTM Experience", in chat or item lore. */
+internal fun hotmXpReward(line: String) = Regex("\\+([\\d,]+) HOTM Experience").matchEntire(line.trim())?.groupValues?.get(1)?.replace(",", "")?.toDoubleOrNull()
+
 object SkillXpOverlay : SkyMyceModule() {
+    private val skillRates = HashMap<Skill, HourlyRate>()
+    private val hotmRate = HourlyRate()
+    private var commissionScreen: Any? = null
+    private val claimable = HashMap<Int, Double>()
+    private val ratesContent by lazy { hudPanel(decorated = false) }
+
+    val ratesWidget = Widget("xp_per_hour", "XP Per Hour", 10, 120, 1f) {
+        if (!GeneralConfig.xpPerHour) return@Widget null
+        val now = System.currentTimeMillis()
+        val lines = buildList {
+            hotmRate.perHour(now)?.let { add("§7HOTM XP/h: §b${NumberUtils.condense(it)}") }
+            skillRates.entries.sortedBy { it.key.name }.forEach { (skill, rate) ->
+                rate.perHour(now)?.let { add("§7${skill.name.lowercase().replaceFirstChar(Char::uppercase)} XP/h: §b${NumberUtils.condense(it)}") }
+            }
+        }
+        if (lines.isEmpty()) null else ratesContent.updateTextLines(lines)
+    }
+
+    @Subscription
+    fun onSkillXp(event: SkillExpGainedEvent) {
+        if (event.amount > 0) skillRates.getOrPut(event.skill) { HourlyRate() }.add(event.amount.toDouble(), System.currentTimeMillis())
+    }
+
+    @Subscription
+    fun onHotmChat(event: ChatReceivedEvent.Pre) {
+        hotmXpReward(event.text)?.let { hotmRate.add(it, System.currentTimeMillis()) }
+    }
+
+    /** Claiming prints nothing in chat, so a completed commission whose slot stops being completed in the open menu counts as claimed. */
+    @Subscription
+    fun onCommissionSlot(event: InventoryChangeEvent) {
+        if (event.title != "Commissions" || event.isInPlayerInventory) return
+        if (event.screen !== commissionScreen) { commissionScreen = event.screen; claimable.clear() }
+        val lore = event.item.getRawLore()
+        val reward = if (lore.any { "COMPLETED" in it }) lore.firstNotNullOfOrNull(::hotmXpReward) else null
+        if (reward != null) claimable[event.slot.index] = reward
+        else claimable.remove(event.slot.index)?.let { hotmRate.add(it, System.currentTimeMillis()) }
+    }
+
     private var display = ""
     private var skill: Skill? = null
     private var progress: Double? = null

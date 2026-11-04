@@ -33,7 +33,7 @@ Combat and abilities, mining, inventory helpers, instances and information.
 - **Instance Helpers**: Alerts when someone is missing from your dungeon or Kuudra party, and handles requeuing for both.
 
 **Mining**
-- **Mining Helpers**: Highlights your commission targets, follows up on Mining Spread, finds the best vein for Pickobulus, can draw gemstone glass as solid wool so it is easier to spot, and shows Crystal Hollows lobby info.
+- **Mining Helpers**: Highlights your commission targets, follows up on Mining Spread, finds the best vein for Pickobulus and points the way when the spot is off screen, can draw gemstone glass and panes in wool so they are easier to spot, and shows Crystal Hollows lobby info.
 
 **Inventory and Interactions**
 - **Auto Refill**: Pick which consumables get topped up when you run out.
@@ -41,7 +41,7 @@ Combat and abilities, mining, inventory helpers, instances and information.
 - **Sign Enter**: Press Enter to finish typing in Auction House, Bazaar and other signs.
 
 **Information**
-- **Information Overlays**: Shows client details and your skill XP progress on screen.
+- **Information Overlays**: Shows client details, your skill XP progress and your estimated HOTM and Skill XP per hour on screen.
 
 # Economy
 Auctions, the Garden, item values and what your stash is worth.

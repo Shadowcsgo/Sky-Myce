@@ -477,6 +477,15 @@ class SettingsScreen @JvmOverloads constructor(
                 keyCapture?.let { it.second.message = Component.literal(keyName(it.first.entry.int)) }
                 keyCapture = setting to b; b.message = Component.literal("Press a key…")
             }
+            entry.options().hasOption(Option.COLOR) -> {
+                fun swatch() = Component.literal("■ ").withColor(entry.int and 0xFFFFFF).append(Component.literal("#%06X".format(entry.int and 0xFFFFFF)).withStyle { it.withColor(MenuTheme.TEXT) })
+                lateinit var open: ButtonComponent
+                val picker = MenuColorPicker().apply {
+                    sizing(Sizing.fixed(150), Sizing.fixed(64)); selectedColor(Color.ofRgb(entry.int and 0xFFFFFF))
+                    onChanged().subscribe { if (entry.setInt(it.rgb() and 0xFFFFFF)) { edited(); open.message = swatch() } }
+                }
+                button("", 90, setting.tip) { if (picker.parent() == null) text.child(picker) else text.removeChild(picker) }.also { open = it; it.message = swatch() }
+            }
             entry.type() == EntryType.ENUM -> button(entry.enum.toString(), 130, setting.tip) { b ->
                 val values = entry.objectType().enumConstants.filterIsInstance<Enum<*>>()
                 menu(b) { dropdown -> values.forEach { option ->

@@ -41,7 +41,7 @@ object MiningConfig : CategoryKt("Mining") {
 
     val gemstoneWool by boolean(false) {
         name = TranslatableValue.literal("Wool Gemstones")
-        description = TranslatableValue.literal("Draws gemstone glass and panes as solid wool of the same color in the Crystal Hollows, Dwarven Mines and Mineshafts, so they are easier to see. Only the look changes: a pane still has its thin hitbox")
+        description = TranslatableValue.literal("Draws gemstone glass and panes with solid wool of the same color in the Crystal Hollows, Dwarven Mines and Mineshafts, so they are easier to see. Panes stay thin and only the look changes")
     }
 
     val spreadPredictor by boolean(false) {
@@ -73,7 +73,13 @@ object MiningConfig : CategoryKt("Mining") {
 
     val pickobulusHelper by boolean(false) {
         name = TranslatableValue.literal("Pickobulus Commission Spot")
-        description = TranslatableValue.literal("Scans the veins around you for your open block commissions and marks where a Pickobulus blast breaks the most; when that spot is hidden or far, an arrow leads you to it")
+        description = TranslatableValue.literal("While you hold a tool with Pickobulus, scans the veins all around you for your open block commissions and marks where a blast breaks the most. When that spot is hidden or far an arrow leads to it, and when it is off screen the Pickobulus Direction widget points the way")
+    }
+
+    val pickobulusColor by color(0xFFAA00) {
+        name = TranslatableValue.literal("Pickobulus Color")
+        description = TranslatableValue.literal("Color of the Pickobulus marker, blocks, arrow and label")
+        allowAlpha = false
     }
 
     val pickobulusRadius by int(3) {
