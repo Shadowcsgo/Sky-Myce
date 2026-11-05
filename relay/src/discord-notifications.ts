@@ -82,6 +82,14 @@ export async function discordPost(path: string, token: string, body: unknown): P
     headers: { Authorization: `Bot ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(body) });
 }
 
+/** Someone not in the server yet (404) stays without the role until the next try; any other refusal is logged. */
+export async function discordAddRole(token: string, guild: string, user: string, role: string): Promise<void> {
+  const response = await fetch(`https://discord.com/api/v10/guilds/${guild}/members/${user}/roles/${role}`, { method: "PUT", redirect: "manual",
+    signal: AbortSignal.timeout(8000), headers: { Authorization: `Bot ${token}` } });
+  await response.body?.cancel();
+  if (!response.ok && response.status !== 404) console.warn({ event: "discord_role_refused", status: response.status });
+}
+
 /** Deletes the bot's own message; one already gone counts as deleted. */
 export async function discordDeleteMessage(token: string, channel: string, message: string): Promise<boolean> {
   if (!snowflake(channel) || !snowflake(message)) return false;

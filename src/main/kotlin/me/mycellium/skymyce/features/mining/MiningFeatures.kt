@@ -20,6 +20,7 @@ import net.minecraft.client.resources.model.geometry.BakedQuad
 import net.minecraft.client.resources.model.geometry.QuadCollection
 import net.minecraft.core.registries.BuiltInRegistries
 import net.minecraft.util.RandomSource
+import net.minecraft.world.level.block.StainedGlassBlock
 import net.minecraft.world.level.block.StainedGlassPaneBlock
 import net.minecraft.resources.Identifier
 import net.minecraft.world.level.block.Block
@@ -56,6 +57,7 @@ import tech.thatgravyboat.skyblockapi.api.events.location.IslandChangeEvent
 import tech.thatgravyboat.skyblockapi.api.events.render.RenderWorldEvent
 import tech.thatgravyboat.skyblockapi.api.events.time.TickEvent
 import tech.thatgravyboat.skyblockapi.api.location.LocationAPI
+import tech.thatgravyboat.skyblockapi.api.location.SkyBlockAreas
 import tech.thatgravyboat.skyblockapi.api.location.SkyBlockIsland
 import tech.thatgravyboat.skyblockapi.api.profile.party.PartyAPI
 import tech.thatgravyboat.skyblockapi.utils.Scheduling.schedule
@@ -130,8 +132,10 @@ object MiningFeatures : SkyMyceModule() {
     private const val SCAN_XZ = 20
     private const val SCAN_Y = 10
     private const val HIGHLIGHTED_BLOCKS = 250
-    /** Pickobulus is marked in place only this close; farther or hidden veins get an arrow. */
-    private const val BLAST_REACH = 15.0
+    /** How far the thrown pickaxe flies; farther or hidden veins get an arrow. */
+    private const val BLAST_REACH = 20.0
+    /** Rough blast size for shortlisting centres and the ripple; [pickobulusBreaks] decides what really breaks. */
+    private const val BLAST_RADIUS = 3
 
     private var miningSpread: Int? = null
     private var gemstoneSpread: Int? = null
@@ -140,20 +144,37 @@ object MiningFeatures : SkyMyceModule() {
     /** Blocks the last break's spread took, with when; drawn as a short fading burst. */
     private var spreadBurst: Pair<List<BlockPos>, Long>? = null
     private class Blast(val centre: BlockPos, val hits: List<BlockPos>, val reachable: Boolean)
+    /** The spot that breaks the most for your open commissions. */
     private var blast: Blast? = null
     private var blastFrom: BlockPos? = null
     private var blastShownAt = 0L
+    /** What a Pickobulus thrown right now would break. */
+    private var aim: Blast? = null
+    private var aimShownAt = 0L
+    private var pickoCooling = false
     private val blastDirectionContent by lazy { hudPanel(decorated = false) }
+    private val blastDirectionPreview by lazy { hudPanel(decorated = false).updateTextLines(listOf("§6↗ §7Pickobulus · 14 blocks · 12m")) }
+    private val BLAST_MINES_BLOCKS by lazy {
+        setOf(Blocks.STONE, Blocks.COBBLESTONE, Blocks.POLISHED_DIORITE, Blocks.PRISMARINE, Blocks.PRISMARINE_BRICKS, Blocks.DARK_PRISMARINE, Blocks.CYAN_TERRACOTTA,
+            Blocks.LIGHT_BLUE_WOOL, Blocks.GRAY_WOOL, Blocks.LAPIS_BLOCK, Blocks.GOLD_BLOCK, Blocks.IRON_BLOCK, Blocks.DIAMOND_BLOCK, Blocks.EMERALD_BLOCK, Blocks.REDSTONE_BLOCK,
+            Blocks.COAL_BLOCK, Blocks.QUARTZ_BLOCK, Blocks.GOLD_ORE, Blocks.IRON_ORE, Blocks.COAL_ORE, Blocks.LAPIS_ORE, Blocks.REDSTONE_ORE, Blocks.DIAMOND_ORE, Blocks.EMERALD_ORE,
+            Blocks.NETHER_QUARTZ_ORE, Blocks.NETHERRACK, Blocks.GLOWSTONE, Blocks.OBSIDIAN, Blocks.END_STONE)
+    }
+    private val BLAST_TUNNEL_BLOCKS by lazy {
+        setOf(Blocks.POLISHED_DIORITE, Blocks.INFESTED_STONE, Blocks.LIGHT_GRAY_CARPET, Blocks.PRISMARINE, Blocks.PRISMARINE_BRICKS, Blocks.DARK_PRISMARINE, Blocks.LIGHT_BLUE_WOOL,
+            Blocks.GRAY_WOOL, Blocks.CYAN_TERRACOTTA, Blocks.BROWN_TERRACOTTA, Blocks.TERRACOTTA, Blocks.SMOOTH_RED_SANDSTONE, Blocks.INFESTED_COBBLESTONE, Blocks.CLAY)
+    }
 
     /** Keeps pointing at the spot once it is off screen, which the marks in the world cannot do. */
-    val blastDirectionWidget = Widget("pickobulus_direction", "Pickobulus Direction", 480, 230, 1f, Anchor.CENTER) {
+    val blastDirectionWidget = Widget("pickobulus_direction", "Pickobulus Direction", 480, 230, 1f, Anchor.CENTER,
+        previewBuilder = { blastDirectionPreview.takeIf { MiningConfig.pickobulusHelper } }) {
         val b = blast ?: return@Widget null
         val player = MC.instance.player ?: return@Widget null
         val toSpot = Vec3.atCenterOf(b.centre).subtract(player.eyePosition)
         val halfHeight = tan(Math.toRadians(MC.instance.options.fov().get() / 2.0))
         val window = MC.instance.window
         val arrow = offScreenArrow(toSpot, player.lookAngle, halfHeight * window.width / window.height.coerceAtLeast(1), halfHeight) ?: return@Widget null
-        blastDirectionContent.updateTextLines(listOf("§6$arrow §7Pickobulus · ~${b.hits.size} blocks · ${toSpot.length().toInt()}m"))
+        blastDirectionContent.updateTextLines(listOf("§6$arrow §7Pickobulus · ${b.hits.size} blocks · ${toSpot.length().toInt()}m"))
     }
     private var commissionBlocks: List<BlockPos> = emptyList()
     private var commissionMobs: List<Entity> = emptyList()
@@ -205,9 +226,23 @@ object MiningFeatures : SkyMyceModule() {
 
     @Subscription
     fun onTabWidget(event: TabWidgetChangeEvent) {
-        if (event.widget != TabWidget.STATS) return
-        miningSpread = parseStat(event.new, "Mining Spread")
-        gemstoneSpread = parseStat(event.new, "Gemstone Spread")
+        when (event.widget) {
+            TabWidget.STATS -> {
+                miningSpread = parseStat(event.new, "Mining Spread")
+                gemstoneSpread = parseStat(event.new, "Gemstone Spread")
+            }
+            TabWidget.PICKAXE_ABILITY -> event.new.firstNotNullOfOrNull(::pickobulusCooling)?.let { pickoCooling = it }
+            else -> {}
+        }
+    }
+
+    /** Covers players who removed the Pickaxe Ability line from their tab list. */
+    @Subscription
+    fun onPickobulusChat(event: ChatReceivedEvent.Pre) {
+        when (event.text.trim()) {
+            "You used your Pickobulus Pickaxe Ability!" -> pickoCooling = true
+            "Pickobulus is now available!" -> pickoCooling = false
+        }
     }
 
     @Subscription
@@ -216,10 +251,13 @@ object MiningFeatures : SkyMyceModule() {
         updateGemstoneWool()
         if (MiningConfig.spreadPredictor) predictSpread() else { nextBlock = null; mining = null; spreadBurst = null }
         // The commission scan covers ~35k blocks, so it refreshes once a second; Pickobulus ranks the same blocks.
-        val picko = MiningConfig.pickobulusHelper && pickobulusHeld()
+        val picko = MiningConfig.pickobulusHelper && !pickoCooling && pickobulusHeld()
         val blocksWanted = MiningConfig.commissionHighlight || picko
         if (!blocksWanted) commissionBlocks = emptyList() else if (ticks % 20 == 0) commissionBlocks = scanCommissionBlocks()
         if (!picko) blast = null else if (ticks % 20 == 0) blast = findBlast()
+        val aimed = if (picko) aimedBlast() else null
+        if (aimed != null && aim == null) aimShownAt = System.nanoTime()
+        aim = aimed
         if (!MiningConfig.commissionHighlight) commissionMobs = emptyList() else if (ticks % 5 == 0) commissionMobs = findCommissionMobs()
         if (Config.devMode && MiningConfig.recordSpread) recordSpread() else { snapshot = null; pending = null }
     }
@@ -305,7 +343,7 @@ object MiningFeatures : SkyMyceModule() {
     }
 
     /** Hypixel lists the selected pickaxe ability on the tool, so this is false for anyone on Mining Speed Boost or similar. */
-    private fun pickobulusHeld() = miningToolHeld() && MC.instance.player?.mainHandItem?.getRawLore().orEmpty().any { "Ability: Pickobulus" in it }
+    private fun pickobulusHeld() = MC.instance.player?.mainHandItem?.getRawLore().orEmpty().any { "Ability: Pickobulus" in it }
 
     private fun predictSpread() {
         val level = MC.instance.level ?: return
@@ -376,24 +414,68 @@ object MiningFeatures : SkyMyceModule() {
             .mapNotNull { pos -> pos.immutable().takeIf { level.getBlockState(it).block in blocks } }
     }
 
+    /** The Mineshafts and Hollows break everything; elsewhere only these blocks, and most of them stay solid (bedrock), so they never expose what is behind them. */
+    private fun blastRule(): (Block) -> BlastBlock {
+        val island = LocationAPI.island
+        val area = LocationAPI.area
+        fun glass(block: Block) = block is StainedGlassBlock || block is StainedGlassPaneBlock
+        return when {
+            island == SkyBlockIsland.MINESHAFT || island == SkyBlockIsland.CRYSTAL_HOLLOWS -> { _ -> BlastBlock.LEAVES_AIR }
+            area == SkyBlockAreas.GLACITE_TUNNELS || area == SkyBlockAreas.GREAT_LAKE -> { block ->
+                when {
+                    block == Blocks.PACKED_ICE || glass(block) -> BlastBlock.LEAVES_AIR
+                    block in BLAST_TUNNEL_BLOCKS -> BlastBlock.LEAVES_SOLID
+                    else -> BlastBlock.KEEP
+                }
+            }
+            island == SkyBlockIsland.DWARVEN_MINES || island == SkyBlockIsland.GOLD_MINES || island == SkyBlockIsland.DEEP_CAVERNS -> { block ->
+                if (block in BLAST_MINES_BLOCKS || glass(block)) BlastBlock.LEAVES_SOLID else BlastBlock.KEEP
+            }
+            else -> { _ -> BlastBlock.KEEP }
+        }
+    }
+
+    private fun blastBreaks(centre: BlockPos): List<BlockPos> {
+        val level = MC.instance.level ?: return emptyList()
+        val rule = blastRule()
+        return pickobulusBreaks(centre) { pos ->
+            val state = level.getBlockState(pos)
+            if (state.isAir) BlastBlock.AIR else if (state.`is`(Blocks.BEDROCK)) BlastBlock.KEEP else rule(state.block)
+        }
+    }
+
+    /** Where the pickaxe is thrown from: Skyblocker's eye heights plus the offset it measured (youtu.be/5hdDrr6jk4E). */
+    private fun blastStart(player: Player) = player.position().add(0.0, (if (player.isShiftKeyDown) 1.27 else 1.62) + 0.53625, 0.0)
+
+    private fun aimedBlast(): Blast? {
+        val level = MC.instance.level ?: return null
+        val player = MC.instance.player ?: return null
+        val start = blastStart(player)
+        val hit = level.clip(ClipContext(start, start.add(player.lookAngle.scale(BLAST_REACH)), ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, player))
+        if (hit.type != HitResult.Type.BLOCK) return null
+        return blastBreaks(hit.blockPos).takeIf { it.isNotEmpty() }?.let { Blast(hit.blockPos, it, true) }
+    }
+
     /** The best Pickobulus centre among nearby veins: marked where you can hit it, otherwise an arrow leads to it. */
     private fun findBlast(): Blast? {
         val level = MC.instance.level ?: return null
         val player = MC.instance.player ?: return null
         if (commissionBlocks.isEmpty()) return null
-        val eye = player.eyePosition
-        val radius = MiningConfig.pickobulusRadius
-        val ranked = rankBlastCentres(commissionBlocks, radius)
-        val best = ranked.firstOrNull() ?: return null
-        // The thrown pickaxe lands on the first block in your line of sight, so a hittable centre must be visible and near.
-        // shortcut: only target blocks are tried as centres; a hard stone block between two veins could score higher.
-        val reachable = ranked.take(64).firstOrNull { (pos, score) ->
-            score >= best.second * 0.75 && Vec3.atCenterOf(pos).distanceTo(eye) <= BLAST_REACH &&
-                level.clip(ClipContext(eye, Vec3.atCenterOf(pos), ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, player)).blockPos == pos
+        val start = blastStart(player)
+        val targets = commissionBlocks.toHashSet()
+        // shortcut: only the 64 densest target blocks are simulated as centres; a hard stone block between two veins could score higher.
+        val ranked = rankBlastCentres(commissionBlocks, BLAST_RADIUS).take(64)
+            .map { (pos, _) -> blastBreaks(pos).let { hits -> Triple(pos, hits, hits.count { it in targets }) } }
+            .sortedByDescending { it.third }
+        val best = ranked.firstOrNull()?.takeIf { it.third > 0 } ?: return null
+        // The thrown pickaxe lands on the first block along your aim, so a hittable centre must be visible and near.
+        val reachable = ranked.firstOrNull { (pos, _, score) ->
+            score >= best.third * 0.75 && Vec3.atCenterOf(pos).distanceTo(start) <= BLAST_REACH &&
+                level.clip(ClipContext(start, Vec3.atCenterOf(pos), ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, player)).blockPos == pos
         }
-        val centre = (reachable ?: best).first
-        if (centre != blast?.centre) { blastFrom = blast?.centre; blastShownAt = System.nanoTime() }
-        return Blast(centre, commissionBlocks.filter { it.distSqr(centre) <= radius * radius }, reachable != null)
+        val chosen = reachable ?: best
+        if (chosen.first != blast?.centre) { blastFrom = blast?.centre; blastShownAt = System.nanoTime() }
+        return Blast(chosen.first, chosen.second, reachable != null)
     }
 
     /** Living mobs whose own or floating name matches an open slayer commission; real players never count. */
@@ -419,10 +501,11 @@ object MiningFeatures : SkyMyceModule() {
     fun render(event: RenderWorldEvent.AfterTranslucent) {
         val next = nextBlock?.first
         val blast = blast
+        val aim = aim
         val burst = spreadBurst
         val highlight = if (MiningConfig.commissionHighlight) exposedNearest(commissionBlocks) else emptyList()
         val mobs = commissionMobs
-        if (next == null && blast == null && burst == null && highlight.isEmpty() && mobs.isEmpty()) return
+        if (next == null && blast == null && aim == null && burst == null && highlight.isEmpty() && mobs.isEmpty()) return
         val now = System.nanoTime()
         val mode = ThemeConfig.animationMode
         val burstNanos = if (mode == GuiMotion.REDUCED) 200_000_000L else 450_000_000L
@@ -441,8 +524,18 @@ object MiningFeatures : SkyMyceModule() {
                 val ease = 1 - (1 - t) * (1 - t)
                 Gizmos.cuboid(AABB(it).inflate(0.004 + 0.12 * (1 - ease)), GizmoStyle.stroke(HudTheme.alpha(SPREAD_COLOR, (40 + 60 * ease).toInt()), 3f)).setAlwaysOnTop()
             }
+            val colour = MiningConfig.pickobulusColor and 0xFFFFFF
+            // Exactly what a blast at your crosshair breaks.
+            aim?.let { a ->
+                val seconds = (now - aimShownAt) / 1e9
+                a.hits.forEach {
+                    val alpha = blastHitAlpha(sqrt(it.distSqr(a.centre)), seconds, BLAST_RADIUS, mode)
+                    if (alpha > 0) Gizmos.cuboid(AABB(it).inflate(0.002), GizmoStyle.fill(HudTheme.alpha(colour, alpha)))
+                }
+                Gizmos.billboardText("Pickobulus · ${a.hits.size} blocks", Vec3.atCenterOf(a.centre).add(0.0, 0.9, 0.0),
+                    TextGizmo.Style.forColorAndCentered(HudTheme.alpha(colour, 100)).withScale(0.4f)).setAlwaysOnTop()
+            }
             blast?.let { b ->
-                val colour = MiningConfig.pickobulusColor and 0xFFFFFF
                 val seconds = (now - blastShownAt) / 1e9
                 val moving = mode != GuiMotion.OFF
                 // The marker glides to a new spot instead of jumping, and breathes gently once it is there.
@@ -454,18 +547,14 @@ object MiningFeatures : SkyMyceModule() {
                 Gizmos.cuboid(marker, GizmoStyle.stroke(HudTheme.alpha(colour, (75 + 25 * breathe).toInt()), 3f)).setAlwaysOnTop()
                 val label = Vec3.atCenterOf(b.centre).add(0.0, 0.9, 0.0)
                 if (b.reachable) {
-                    b.hits.forEach {
-                        val alpha = blastHitAlpha(sqrt(it.distSqr(b.centre)), seconds, MiningConfig.pickobulusRadius, mode)
-                        if (alpha > 0) Gizmos.cuboid(AABB(it).inflate(0.002), GizmoStyle.fill(HudTheme.alpha(colour, alpha)))
-                    }
-                    Gizmos.billboardText("Pickobulus · ~${b.hits.size} blocks", label,
+                    if (b.centre != aim?.centre) Gizmos.billboardText("Best spot · ${b.hits.size} blocks", label,
                         TextGizmo.Style.forColorAndCentered(HudTheme.alpha(colour, 100)).withScale(0.4f)).setAlwaysOnTop()
                 } else MC.instance.player?.let { player ->
                     // Out of reach or hidden: point the way from just in front of you to the best vein.
                     val target = Vec3.atCenterOf(b.centre)
                     val start = player.eyePosition.add(player.lookAngle.scale(1.2)).add(0.0, -0.4, 0.0)
                     Gizmos.arrow(start, target, HudTheme.alpha(colour, (65 + 25 * breathe).toInt()), 2f).setAlwaysOnTop()
-                    Gizmos.billboardText("Best vein · ~${b.hits.size} blocks · ${target.distanceTo(player.eyePosition).toInt()}m", label,
+                    Gizmos.billboardText("Best spot · ${b.hits.size} blocks · ${target.distanceTo(player.eyePosition).toInt()}m", label,
                         TextGizmo.Style.forColorAndCentered(HudTheme.alpha(colour, 100)).withScale(0.5f)).setAlwaysOnTop()
                 }
             }
@@ -493,6 +582,8 @@ object MiningFeatures : SkyMyceModule() {
         mining = null
         spreadBurst = null
         blast = null
+        aim = null
+        pickoCooling = false
         commissionBlocks = emptyList()
         commissionMobs = emptyList()
         if (event.old == SkyBlockIsland.CRYSTAL_HOLLOWS) {
@@ -548,6 +639,31 @@ internal fun offScreenArrow(toTarget: Vec3, look: Vec3, halfWidthTan: Double, ha
     if (z > 0 && abs(x) <= z * halfWidthTan && abs(y) <= z * halfHeightTan) return null
     return "↑↗→↘↓↙←↖"[Math.floorMod(Math.round(atan2(x, y) / (Math.PI / 4)).toInt(), 8)].toString()
 }
+
+/** How a block reacts to Pickobulus: empty, untouched, broken but left solid (it turns to bedrock), or broken and left open. */
+internal enum class BlastBlock { AIR, KEEP, LEAVES_SOLID, LEAVES_AIR }
+
+/**
+ * What a Pickobulus landing on [hit] breaks, worked out like Skyblocker's PickobulusHelper (LGPL-3.0, github.com/SkyblockerMod/Skyblocker):
+ * every breakable block in the box from -3 to +2 around it that touches air, where a block left open exposes the ones scanned after it.
+ */
+internal fun pickobulusBreaks(hit: BlockPos, kindAt: (BlockPos) -> BlastBlock): List<BlockPos> {
+    fun index(x: Int, y: Int, z: Int) = x * 64 + y * 8 + z
+    val kinds = Array(512) { kindAt(hit.offset(it / 64 - 4, it / 8 % 8 - 4, it % 8 - 4)) }
+    val broken = ArrayList<BlockPos>()
+    for (x in 1..6) for (y in 1..6) for (z in 1..6) {
+        val kind = kinds[index(x, y, z)]
+        if (kind == BlastBlock.AIR || kind == BlastBlock.KEEP) continue
+        val exposed = listOf(index(x - 1, y, z), index(x + 1, y, z), index(x, y - 1, z), index(x, y + 1, z), index(x, y, z - 1), index(x, y, z + 1)).any { kinds[it] == BlastBlock.AIR }
+        if (!exposed) continue
+        broken += hit.offset(x - 4, y - 4, z - 4)
+        if (kind == BlastBlock.LEAVES_AIR) kinds[index(x, y, z)] = BlastBlock.AIR
+    }
+    return broken
+}
+
+/** From a tab list line under Pickaxe Ability: whether Pickobulus is cooling down, null for any other line. */
+internal fun pickobulusCooling(line: String) = line.trim().takeIf { it.startsWith("Pickobulus: ") }?.let { it != "Pickobulus: Available" }
 
 /** Blast blocks ripple in from the centre, then a soft wave keeps travelling outward so the radius reads at a glance. */
 internal fun blastHitAlpha(distance: Double, seconds: Double, radius: Int, mode: GuiMotion): Int {

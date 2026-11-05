@@ -4,7 +4,7 @@ import { CosmeticAssets } from "./cosmetic-assets";
 import { ACTIVATION_TTL, DEVICE_RESET_COOLDOWN, type DeveloperActor, type LicensePolicy } from "./licensing";
 import { AuthorizationError, deny, randomToken, sha256 } from "./drm";
 import { PromptJobs, type PromptActor, type PromptConfig } from "./prompts";
-import { ADMIN_ALERT_IDS, deliverAccountAlert } from "./discord-notifications";
+import { ADMIN_ALERT_IDS, deliverAccountAlert, discordAddRole } from "./discord-notifications";
 import { ircMentionNames, ircPlainText } from "./irc-model";
 import { CommunityAccounts, type CommunityConfig, type CommunitySessionCheck } from "./community";
 import { CommunitySharingStore, type SharingSession, type SharingCategory } from "./community-sharing";
@@ -14,7 +14,7 @@ import { CommunityBazaar, type BazaarStatsResult } from "./bazaar";
 import { BazaarMarket } from "./bazaar-market";
 import { GreenhouseReminders, type GreenhouseUpload } from "./greenhouse-reminders";
 
-export type AccountsConfig = LicensePolicy & PromptConfig & CommunityConfig & CosmeticsConfig & { ACCOUNT_STORE?: DurableObjectNamespace<AccountStore>; DISCORD_RNG_CHANNEL_ID?: string; COSMETIC_ASSETS?: R2Bucket; BAZAAR_MARKET_PROVIDER?: string; USER_BOT_TOKEN?: string };
+export type AccountsConfig = LicensePolicy & PromptConfig & CommunityConfig & CosmeticsConfig & { ACCOUNT_STORE?: DurableObjectNamespace<AccountStore>; DISCORD_RNG_CHANNEL_ID?: string; COSMETIC_ASSETS?: R2Bucket; BAZAAR_MARKET_PROVIDER?: string; USER_BOT_TOKEN?: string; BACKEND_BOT_TOKEN?: string; DISCORD_BETA_TESTER_ROLE_ID?: string };
 type AccountRow = { account_id: string; discord_id: string; status: string; license_status: string; license_expires_at: number | null;
   device_hash: string | null; hardware_hash: string | null; hwid_reset_at: number | null; hwid_bound_at: number | null; generation: number; activated_at: number | null; created_at: number; last_seen: number; enrollment_blocked: number; is_admin: number };
 export type AccountSummary = { accountId: string; discordId: string; status: string; isAdmin: boolean; activated: boolean; licenseStatus: string; licenseExpiresAt: number | null;
@@ -145,7 +145,7 @@ export class AccountStore extends DurableObject<AccountsConfig> {
     }
     this.community = new CommunityAccounts(ctx.storage.sql, fn => ctx.storage.transactionSync(fn), env, {
       ensure: id => this.ensureAccount(id), account: id => this.byId(id), isAdmin: actor => this.isAdmin(actor),
-      interaction: actor => this.interaction(actor), limit: (key, count) => this.limit(key, count),
+      connected: id => this.grantBetaTester(id), interaction: actor => this.interaction(actor), limit: (key, count) => this.limit(key, count),
       audit: (actor, account, action, metadata) => this.audit(actor, account, action, metadata),
       mergeAccount: (source, target) => this.sharing.mergeAccount(source, target), mergeUuid: (uuid, target) => this.sharing.mergeUuid(uuid, target),
       detachUuid: (uuid, source) => this.sharing.detachUuid(uuid, source),
@@ -440,6 +440,12 @@ export class AccountStore extends DurableObject<AccountsConfig> {
     }
     return account;
   }
+  /** Runs on every session refresh too (no stored state), which reaches those already connected and anyone who joins the server later. */
+  private grantBetaTester(discordId: string): void {
+    const { BACKEND_BOT_TOKEN: token, DISCORD_GUILD_ID: guild, DISCORD_BETA_TESTER_ROLE_ID: role } = this.env;
+    if (token && guild && role) this.ctx.waitUntil(discordAddRole(token, guild, discordId, role).catch(() => console.warn({ event: "discord_role_unavailable" })));
+  }
+
   private audit(actor: string, accountId: string | null, action: string, metadata: Record<string, unknown> = {}, override = false): void {
     // Callers supply fixed safe fields only; never serialize request bodies, keys, signatures, or credentials.
     const account = accountId ? this.byId(accountId) : undefined;

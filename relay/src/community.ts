@@ -32,7 +32,7 @@ type Session = { session_id: string; account_id: string; uuid: string; generatio
   access_hash: string; access_expires_at: number; created_at: number; last_seen: number; revoked_at: number | null; mod_version: string;
   connected_at: number | null; connection_id: string | null };
 type Device = { identifier: string; source: string; platform: string };
-type Hooks = { ensure(discordId: string): Account; account(id: string): Account | undefined; isAdmin(actor: DeveloperActor): boolean;
+type Hooks = { ensure(discordId: string): Account; account(id: string): Account | undefined; isAdmin(actor: DeveloperActor): boolean; connected(discordId: string): void;
   interaction(actor: DeveloperActor): void; limit(key: string, count: number): void; audit(actor: string, account: string | null, action: string, metadata?: Record<string, unknown>): void;
   mergeAccount(source: string, target: string): void; mergeUuid(uuid: string, target: string): void; detachUuid(uuid: string, source: string): void };
 const id = /^[0-9]{17,20}$/, uuid = /^[a-f0-9]{32}$/, token = /^[A-Za-z0-9_-]{43}$/;
@@ -168,6 +168,7 @@ export class CommunityAccounts {
       discord.id, cleanName(discord.username), cleanName(discord.displayName || discord.username), Date.now());
     this.sql.exec("UPDATE community_connect_flows SET account_id=? WHERE flow_id=?", account.account_id, flow.flow_id);
     this.hooks.audit(discord.id, account.account_id, "community_connected", { uuid: flow.uuid });
+    this.hooks.connected(discord.id);
     return { ok: true, identity: { ...this.identity(account.account_id), uuid: flow.uuid }, invalidatedAccounts: invalidated, invalidatedMinecraft: invalidated.length ? [flow.uuid] : [] };
   }
   async oauthPreview(launch: string): Promise<CommunityResult> {
@@ -284,6 +285,7 @@ export class CommunityAccounts {
         const now = Date.now(), accessExpiresAt = now + ACCESS_TTL, refreshExpiresAt = now + REFRESH_TTL;
         this.sql.exec("UPDATE community_sessions SET uuid=?,refresh_hash=?,refresh_expires_at=?,access_hash=?,access_expires_at=?,last_seen=?,mod_version=? WHERE session_id=?",
           profile.id, nextRefresh, refreshExpiresAt, nextAccess, accessExpiresAt, now, cleanName(raw.modVersion), session.session_id);
+        this.hooks.connected(account.discord_id);
         return { ok: true, identity: { ...this.identity(account.account_id), uuid: profile.id }, credentials: { sessionId: session.session_id, accessToken, accessExpiresAt, refreshToken, refreshExpiresAt } };
       });
     } catch (error) { return failure(error); }

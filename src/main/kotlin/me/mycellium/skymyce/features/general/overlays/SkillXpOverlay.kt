@@ -6,6 +6,7 @@ import io.wispforest.owo.ui.container.UIContainers
 import io.wispforest.owo.ui.core.OwoUIGraphics
 import io.wispforest.owo.ui.core.Sizing
 import io.wispforest.owo.ui.core.VerticalAlignment
+import me.mycellium.skymyce.SkyMyce
 import me.mycellium.skymyce.SkyMyceModule
 import me.mycellium.skymyce.config.misc.GeneralConfig
 import me.mycellium.skymyce.config.misc.StatusBarsConfig
@@ -26,6 +27,9 @@ import tech.thatgravyboat.skyblockapi.api.events.base.Subscription
 import tech.thatgravyboat.skyblockapi.api.events.chat.ChatReceivedEvent
 import tech.thatgravyboat.skyblockapi.api.events.hypixel.SkillExpGainedEvent
 import tech.thatgravyboat.skyblockapi.api.events.screen.InventoryChangeEvent
+import tech.thatgravyboat.skyblockapi.api.location.LocationAPI
+import tech.thatgravyboat.skyblockapi.api.location.SkyBlockIsland
+import tech.thatgravyboat.skyblockapi.utils.extentions.cleanName
 import tech.thatgravyboat.skyblockapi.utils.extentions.getRawLore
 import tech.thatgravyboat.skyblockapi.api.events.info.ActionBarWidget
 import tech.thatgravyboat.skyblockapi.api.events.info.ActionBarWidgetChangeEvent
@@ -69,13 +73,19 @@ object SkillXpOverlay : SkyMyceModule() {
     private val hotmRate = HourlyRate()
     private var commissionScreen: Any? = null
     private val claimable = HashMap<Int, Double>()
+    private var rewardFormatLogged = false
+    private val COMMISSION_ITEM = Regex("Commission #\\d+(?: NEW)?")
+    private val MINING_ISLANDS = setOf(SkyBlockIsland.DWARVEN_MINES, SkyBlockIsland.CRYSTAL_HOLLOWS, SkyBlockIsland.MINESHAFT)
     private val ratesContent by lazy { hudPanel(decorated = false) }
+    private val ratesPreview by lazy { hudPanel(decorated = false).updateTextLines(listOf("§7HOTM XP/h: §b12.4k", "§7Mining XP/h: §b310k")) }
 
-    val ratesWidget = Widget("xp_per_hour", "XP Per Hour", 10, 120, 1f) {
+    val ratesWidget = Widget("xp_per_hour", "XP Per Hour", 10, 120, 1f, previewBuilder = { ratesPreview.takeIf { GeneralConfig.xpPerHour } }) {
         if (!GeneralConfig.xpPerHour) return@Widget null
         val now = System.currentTimeMillis()
         val lines = buildList {
-            hotmRate.perHour(now)?.let { add("§7HOTM XP/h: §b${NumberUtils.condense(it)}") }
+            val hotm = hotmRate.perHour(now)
+            // On mining islands the line is there from the start, so the widget does not look broken before the first reward.
+            if (hotm != null || LocationAPI.island in MINING_ISLANDS) add("§7HOTM XP/h: §b${hotm?.let { NumberUtils.condense(it) } ?: "—"}")
             skillRates.entries.sortedBy { it.key.name }.forEach { (skill, rate) ->
                 rate.perHour(now)?.let { add("§7${skill.name.lowercase().replaceFirstChar(Char::uppercase)} XP/h: §b${NumberUtils.condense(it)}") }
             }
@@ -93,13 +103,18 @@ object SkillXpOverlay : SkyMyceModule() {
         hotmXpReward(event.text)?.let { hotmRate.add(it, System.currentTimeMillis()) }
     }
 
-    /** Claiming prints nothing in chat, so a completed commission whose slot stops being completed in the open menu counts as claimed. */
+    /** Claiming prints nothing in chat, so a completed commission whose slot turns into a fresh one in the open menu counts as claimed. */
     @Subscription
     fun onCommissionSlot(event: InventoryChangeEvent) {
-        if (event.title != "Commissions" || event.isInPlayerInventory) return
+        if (event.isInPlayerInventory || !COMMISSION_ITEM.matches(event.item.cleanName)) return
         if (event.screen !== commissionScreen) { commissionScreen = event.screen; claimable.clear() }
         val lore = event.item.getRawLore()
-        val reward = if (lore.any { "COMPLETED" in it }) lore.firstNotNullOfOrNull(::hotmXpReward) else null
+        val completed = lore.any { "COMPLETED" in it }
+        val reward = if (completed) lore.firstNotNullOfOrNull(::hotmXpReward) else null
+        if (completed && reward == null && !rewardFormatLogged) {
+            rewardFormatLogged = true
+            SkyMyce.logger.warn("No HOTM XP reward recognised on a completed commission: {}", lore)
+        }
         if (reward != null) claimable[event.slot.index] = reward
         else claimable.remove(event.slot.index)?.let { hotmRate.add(it, System.currentTimeMillis()) }
     }

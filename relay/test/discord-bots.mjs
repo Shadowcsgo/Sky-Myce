@@ -9,7 +9,7 @@ async function load(entry) {
 }
 const { accountCommand, handleAccountInteraction, handleAccountAutocomplete } = await load('discord-accounts.ts');
 const { verifiedInteraction } = await load('discord.ts');
-const { deliverAccountAlert } = await load('discord-notifications.ts');
+const { deliverAccountAlert, discordAddRole } = await load('discord-notifications.ts');
 const { ircMedia } = await load('irc-model.ts');
 const actor = { id: '11111111111111111', guildId: '22222222222222222', roles: [], interactionId: '33333333333333333' };
 const config = { DISCORD_GUILD_ID: actor.guildId };
@@ -20,6 +20,23 @@ const identity = { accountId: 'private-account-reference', discordId: target, us
 const command = (name = 'status', sub = null, options = []) => ({ type: 2, id: actor.interactionId, guild_id: actor.guildId,
   application_id: '55555555555555555', token: 'interaction-token-never-log-this', member: { user: { id: actor.id }, roles: actor.roles },
   data: { name, options: sub ? [{ type: 1, name: sub, options }] : options } });
+
+test('connecting adds the guild role as the bot, and someone not in the server is no error', async () => {
+  const calls = [], realFetch = globalThis.fetch, warnings = [], realWarn = console.warn;
+  let status = 204;
+  globalThis.fetch = async (url, init) => { calls.push({ url, init }); return new Response(null, { status }); };
+  console.warn = entry => warnings.push(entry);
+  try {
+    await discordAddRole('bot-token', '1', '2', '3');
+    status = 404; await discordAddRole('bot-token', '1', '2', '3');
+    assert.equal(warnings.length, 0);
+    status = 403; await discordAddRole('bot-token', '1', '2', '3');
+    assert.deepEqual(warnings, [{ event: 'discord_role_refused', status: 403 }]);
+  } finally { globalThis.fetch = realFetch; console.warn = realWarn; }
+  assert.equal(calls[0].url, 'https://discord.com/api/v10/guilds/1/members/2/roles/3');
+  assert.equal(calls[0].init.method, 'PUT');
+  assert.equal(calls[0].init.headers.Authorization, 'Bot bot-token');
+});
 
 test('each bot accepts only its own Discord signature, exact body and fresh timestamp', async () => {
   const keys = await crypto.subtle.generateKey('Ed25519', true, ['sign', 'verify']);

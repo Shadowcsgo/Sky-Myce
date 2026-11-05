@@ -72,21 +72,13 @@ object MiningConfig : CategoryKt("Mining") {
     }
 
     val pickobulusHelper by boolean(false) {
-        name = TranslatableValue.literal("Pickobulus Commission Spot")
-        description = TranslatableValue.literal("While you hold a tool with Pickobulus, scans the veins all around you for your open block commissions and marks where a blast breaks the most. When that spot is hidden or far an arrow leads to it, and when it is off screen the Pickobulus Direction widget points the way")
+        name = TranslatableValue.literal("Pickobulus Helper")
+        description = TranslatableValue.literal("While you hold a tool with Pickobulus and it is off cooldown, shows exactly which blocks a blast breaks where you aim, worked out like Skyblocker's helper. It also marks the spot that breaks the most for your open block commissions: when that spot is hidden or far an arrow leads to it, and when it is off screen the Pickobulus Direction widget points the way")
     }
 
     val pickobulusColor by color(0xFFAA00) {
         name = TranslatableValue.literal("Pickobulus Color")
         description = TranslatableValue.literal("Color of the Pickobulus marker, blocks, arrow and label")
         allowAlpha = false
-    }
-
-    val pickobulusRadius by int(3) {
-        name = TranslatableValue.literal("Pickobulus Radius")
-        description = TranslatableValue.literal("Blast radius in blocks, including perk or Sky Mall boosts")
-
-        slider = true
-        range = 1..5
     }
 }

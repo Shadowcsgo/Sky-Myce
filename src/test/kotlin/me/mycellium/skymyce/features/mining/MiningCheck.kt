@@ -3,6 +3,15 @@ package me.mycellium.skymyce.features.mining
 import net.minecraft.core.BlockPos
 
 fun main() {
+    // A ceiling above open air: broken blocks left open expose the ones above them, those left solid do not.
+    val ceiling = { kind: BlastBlock -> { pos: BlockPos -> if (pos.y < 0) BlastBlock.AIR else kind } }
+    check(pickobulusBreaks(BlockPos.ZERO, ceiling(BlastBlock.LEAVES_SOLID)).size == 36)
+    check(pickobulusBreaks(BlockPos.ZERO, ceiling(BlastBlock.LEAVES_AIR)).size == 108)
+    check(pickobulusBreaks(BlockPos.ZERO, ceiling(BlastBlock.KEEP)).isEmpty())
+    // The box runs from -3 to +2 around the hit block.
+    val blastBox = pickobulusBreaks(BlockPos(10, 0, 10), ceiling(BlastBlock.LEAVES_SOLID))
+    check(blastBox.minOf { it.x } == 7 && blastBox.maxOf { it.x } == 12 && blastBox.all { it.y == 0 })
+    check(pickobulusCooling("  Pickobulus: Available") == false && pickobulusCooling(" Pickobulus: 23s") == true && pickobulusCooling("Mining Speed Boost: Available") == null)
     // A vein along x, plus one ore beside the block being mined.
     val origin = BlockPos(0, 0, 0)
     val ores = setOf(BlockPos(1, 0, 0), BlockPos(2, 0, 0), BlockPos(3, 0, 0), BlockPos(0, 0, 1))
