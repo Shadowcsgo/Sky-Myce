@@ -3,6 +3,14 @@
 Newest first. Every release gets a `## <version> (<date>)` section with one line per change you can see in game. The
 Daily Digest shows this whole file, the update prompt shows the section for the new version, and a copy goes to Discord.
 
+## 2.8.0-beta-050 (2026-11-05)
+- Pickobulus Commission Spot is now called Pickobulus Helper. While you hold a tool with Pickobulus, it shows exactly which blocks a blast would break at the block you are aiming at (up to 20 blocks away) and how many. The calculation comes from Skyblocker's Pickobulus helper. It works in the Dwarven Mines, Glacite Tunnels and Great Glacite Lake, Crystal Hollows, Mineshafts, Gold Mines and Deep Caverns, and no longer needs an open commission.
+- The marker for the best spot for your open block commissions stays, with its arrow and the Pickobulus Direction widget, but it now picks the spot with that same exact calculation, so its block count is exact instead of an estimate.
+- The Pickobulus Radius setting is gone; it is no longer needed.
+- The helper only shows while Pickobulus is off cooldown. It reads the Pickaxe Ability line in the tab list and falls back on the chat messages if that line is turned off.
+- Fixed: XP Per Hour and Pickobulus Direction could not be placed in the HUD editor until they had something to show. They now show an example there when their feature is on.
+- Fixed: XP Per Hour now always shows a HOTM XP line on mining islands (a dash until the first reward), and claimed commissions are recognised more reliably.
+
 ## 2.8.0-beta-049 (2026-11-04)
 - Wool Gemstones: gemstone panes keep their thin pane shape and just use the wool texture instead of being drawn as full blocks. Glass blocks are still full wool.
 - Pickobulus Commission Spot only runs while you hold a tool with the Pickobulus ability selected.
