@@ -402,7 +402,7 @@ internal open class MenuListRow(private val title: String, private val subtitle:
             titleLine = menuEllipsis(title, width - textLeft - 6, 10.0, true)
             subtitleLine = if (subtitle.isBlank()) "" else menuEllipsis(subtitle, width - textLeft - 6, 8.5, false)
         }
-        icon?.let { paintMenuIcon(canvas, it, x + 7.0, y + (height - 13) / 2.0, 13.0, MenuTheme.alpha(if (emphasis > .1 || isFocused) MenuTheme.ACCENT else MenuTheme.MUTED)) }
+        icon?.let { paintMenuIcon(canvas, it, x + 5.5, y + (height - 16) / 2.0, 16.0, MenuTheme.alpha(if (emphasis > .1 || isFocused) MenuTheme.ACCENT else MenuTheme.MUTED)) }
         val titleHeight = MenuCanvas.lineHeight(10.0)
         val total = titleHeight + if (subtitleLine.isEmpty()) 0 else MenuCanvas.lineHeight(8.5)
         val top = y + (height - total) / 2.0
@@ -411,7 +411,7 @@ internal open class MenuListRow(private val title: String, private val subtitle:
     }
 }
 
-/** A small square button drawn as a vector icon, so it never depends on a font having the glyph. */
+/** A small square button drawn with a custom PNG icon, so it never depends on a font having the glyph. */
 internal open class MenuIconButton(private val icon: Int, label: String, action: (ButtonComponent) -> Unit) : MenuButton(Component.literal(label), action) {
     /** Draw nothing while inactive (a Reset with nothing to reset), instead of a greyed icon. */
     var hiddenWhenInactive = false
@@ -420,8 +420,8 @@ internal open class MenuIconButton(private val icon: Int, label: String, action:
     override fun paint(graphics: MenuGraphics, delta: Float, hover: Double, chosen: Double, press: Double) {
         if (!active && hiddenWhenInactive) return
         val canvas = graphics.canvas
-        if (hover > 0.0 || press > 0.0) canvas.roundedRect(x.toDouble(), y.toDouble(), width.toDouble(), height.toDouble(), MenuTheme.RADIUS.toDouble(),
-            MenuTheme.alpha(MenuTheme.blend(MenuTheme.CARD, MenuTheme.ACCENT, (hover * MenuTheme.style.hoverWeight + press * 9).toInt()), MenuTheme.OPACITY))
+        if (hover > 0.0 || chosen > 0.0 || press > 0.0) canvas.roundedRect(x.toDouble(), y.toDouble(), width.toDouble(), height.toDouble(), MenuTheme.RADIUS.toDouble(),
+            MenuTheme.alpha(MenuTheme.blend(MenuTheme.CARD, MenuTheme.ACCENT, (maxOf(hover, chosen) * MenuTheme.style.hoverWeight + press * 9).toInt()), MenuTheme.OPACITY))
         if (isFocused) MenuTheme.focus(graphics, x, y, width, height)
         val size = minOf(12.0, width - 4.0, height - 4.0)
         val color = if (!active) MenuTheme.alpha(MenuTheme.MUTED, 45) else MenuTheme.alpha(if (hover > .1 || chosen > .5 || isFocused) MenuTheme.ACCENT else MenuTheme.MUTED)

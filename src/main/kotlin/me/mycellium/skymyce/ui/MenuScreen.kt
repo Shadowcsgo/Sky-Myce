@@ -755,7 +755,7 @@ private fun paintNavigationRow(canvas: MenuCanvas, rect: MenuRect, title: String
             (hover * style.hoverWeight + chosen * style.selectionWeight).toInt()), MenuTheme.OPACITY))
     if (focused) canvas.roundedBorder(rect.x, rect.y, rect.width, rect.height, radius, style.focusWidth.toDouble(), MenuTheme.alpha(MenuTheme.ACCENT))
     val expanded = rect.width >= 92
-    val size = minOf(14.0, rect.height - 4).coerceAtLeast(1.0)
+    val size = minOf(17.0, rect.height - 4).coerceAtLeast(1.0)
     val left = if (expanded) rect.x + 10 else rect.x + (rect.width - size) / 2
     paintMenuIcon(canvas, icon, left, rect.y + (rect.height - size) / 2, size,
         MenuTheme.alpha(if (chosen > .1 || hover > .1 || focused) MenuTheme.ACCENT else MenuTheme.MUTED))
@@ -820,32 +820,42 @@ private fun intersectMenuClip(a: MenuCanvas.Clip, b: MenuCanvas.Clip): MenuCanva
         (minOf(a.y + a.height, b.y + b.height) - y).coerceAtLeast(0))
 }
 
+/** PNG artwork keeps its painted colors; caller alpha still handles disabled and fading controls. */
 internal fun paintMenuIcon(canvas: MenuCanvas, id: Int, x: Double, y: Double, size: Double, color: Int) {
-    val unit = size / 16
-    fun line(a: Double, b: Double, c: Double, d: Double) = canvas.line(x + a * unit, y + b * unit, x + c * unit, y + d * unit, 1.35 * unit, color)
-    fun ring(cx: Double, cy: Double, r: Double) = canvas.arc(x + cx * unit, y + cy * unit, r * unit, 0.0, 360.0, color, (r - 1.3) * unit)
-    when (id) {
-        0 -> { line(1.0, 7.0, 8.0, 1.0); line(8.0, 1.0, 15.0, 7.0); line(3.0, 6.0, 3.0, 15.0); line(3.0, 15.0, 13.0, 15.0); line(13.0, 15.0, 13.0, 6.0); line(8.0, 15.0, 8.0, 10.0) }
-        1 -> { line(2.0, 3.0, 14.0, 3.0); line(2.0, 3.0, 2.0, 14.0); line(2.0, 14.0, 14.0, 14.0); line(14.0, 14.0, 14.0, 3.0); line(5.0, 1.0, 5.0, 5.0); line(11.0, 1.0, 11.0, 5.0); line(5.0, 8.0, 11.0, 8.0); line(5.0, 11.0, 9.0, 11.0) }
-        2, 3 -> { ring(8.0, 4.0, 2.5); ring(3.0, 7.0, 2.0); ring(13.0, 7.0, 2.0); line(5.0, 14.0, 5.0, 10.0); line(5.0, 10.0, 11.0, 10.0); line(11.0, 10.0, 11.0, 14.0); if (id == 2) line(1.0, 15.0, 15.0, 15.0) }
-        4 -> { line(2.0, 14.0, 13.0, 3.0); line(13.0, 3.0, 15.0, 1.0); line(2.0, 2.0, 14.0, 14.0); line(1.0, 10.0, 6.0, 15.0); line(10.0, 15.0, 15.0, 10.0) }
-        5 -> { line(4.0, 3.0, 9.0, 8.0); line(7.0, 1.0, 12.0, 6.0); line(4.0, 3.0, 7.0, 1.0); line(9.0, 8.0, 12.0, 6.0); line(8.0, 6.0, 2.0, 14.0); line(9.0, 14.0, 15.0, 14.0) }
-        6 -> { line(8.0, 1.0, 10.0, 6.0); line(10.0, 6.0, 15.0, 8.0); line(15.0, 8.0, 10.0, 10.0); line(10.0, 10.0, 8.0, 15.0); line(8.0, 15.0, 6.0, 10.0); line(6.0, 10.0, 1.0, 8.0); line(1.0, 8.0, 6.0, 6.0); line(6.0, 6.0, 8.0, 1.0) }
-        7 -> { line(1.0, 1.0, 15.0, 1.0); line(1.0, 1.0, 1.0, 15.0); line(1.0, 15.0, 15.0, 15.0); line(15.0, 15.0, 15.0, 1.0); line(6.0, 1.0, 6.0, 15.0); line(6.0, 7.0, 15.0, 7.0) }
-        9 -> { ring(8.0, 8.0, 5.0); ring(8.0, 8.0, 1.5); line(8.0, 0.0, 8.0, 4.0); line(8.0, 12.0, 8.0, 16.0); line(0.0, 8.0, 4.0, 8.0); line(12.0, 8.0, 16.0, 8.0) }
-        10 -> { ring(6.0, 6.0, 4.5); line(9.5, 9.5, 15.0, 15.0) }
-        // A screen with two placed widgets.
-        12 -> { line(1.0, 2.0, 15.0, 2.0); line(1.0, 2.0, 1.0, 14.0); line(1.0, 14.0, 15.0, 14.0); line(15.0, 14.0, 15.0, 2.0)
-            line(3.5, 5.0, 7.5, 5.0); line(3.5, 5.0, 3.5, 8.0); line(3.5, 8.0, 7.5, 8.0); line(7.5, 8.0, 7.5, 5.0); line(9.5, 11.0, 12.5, 11.0) }
-        // More (three dots), reset (an open circle with an arrowhead), chevron right, and a pin.
-        13 -> for (cx in listOf(3.0, 8.0, 13.0)) canvas.arc(x + cx * unit, y + 8 * unit, 1.5 * unit, 0.0, 360.0, color)
-        // The arc leaves a gap at the upper left (arc angles start 180° from east); the arrowhead closes its lower end.
-        14 -> { canvas.arc(x + 8 * unit, y + 8.5 * unit, 5.5 * unit, 80.0, 380.0, color, 4.2 * unit); line(2.8, 6.6, 2.0, 3.0); line(2.8, 6.6, 6.2, 5.4) }
-        15 -> { line(6.0, 3.0, 11.0, 8.0); line(11.0, 8.0, 6.0, 13.0) }
-        16 -> { line(5.0, 2.0, 11.0, 2.0); line(6.0, 2.0, 6.0, 8.0); line(10.0, 2.0, 10.0, 8.0); line(3.5, 8.5, 12.5, 8.5); line(8.0, 8.5, 8.0, 15.0) }
-        11 -> { for (index in 0..2) { val row = 3.0 + index * 5; val knob = when (index) { 0 -> 5.0; 1 -> 11.0; else -> 7.0 }; line(1.0, row, 15.0, row); ring(knob, row, 2.0) } }
-        else -> { ring(8.0, 8.0, 4.0); ring(8.0, 8.0, 1.8); for (i in 0..7) { val angle = i * Math.PI / 4; line(8 + kotlin.math.cos(angle) * 5, 8 + kotlin.math.sin(angle) * 5, 8 + kotlin.math.cos(angle) * 7, 8 + kotlin.math.sin(angle) * 7) } }
+    if (!size.isFinite() || size <= 0.0) return
+    val image = MenuIcons.image(id)
+    val scale = size / maxOf(image.width, image.height)
+    val width = image.width * scale; val height = image.height * scale
+    val previousOpacity = canvas.opacity
+    try {
+        canvas.opacity *= (color ushr 24) / 255.0
+        canvas.picture(image, x + (size - width) / 2, y + (size - height) / 2, width, height)
+    } finally { canvas.opacity = previousOpacity }
+}
+
+/** Decode one atlas on first use; subsequent paints reuse the twenty retained source views. */
+internal object MenuIcons {
+    const val COUNT = 20
+    private val sprites: Array<java.awt.image.BufferedImage> by lazy {
+        val atlas = requireNotNull(javaClass.getResourceAsStream("/assets/skymyce/textures/ui/menu-icons.png")).use {
+            requireNotNull(javax.imageio.ImageIO.read(it)) { "The menu icon PNG atlas could not be decoded" }
+        }
+        val manifest = requireNotNull(javaClass.getResourceAsStream("/assets/skymyce/textures/ui/menu-icons.json")).reader().use {
+            com.google.gson.JsonParser.parseReader(it).asJsonObject
+        }
+        require(atlas.width == manifest.get("width").asInt && atlas.height == manifest.get("height").asInt)
+        val icons = manifest.getAsJsonArray("icons")
+        require(icons.size() == COUNT)
+        Array(COUNT) { index ->
+            val entry = icons[index].asJsonObject
+            require(entry.get("id").asInt == index)
+            val x = entry.get("x").asInt; val y = entry.get("y").asInt
+            val width = entry.get("width").asInt; val height = entry.get("height").asInt
+            require(x >= 0 && y >= 0 && width > 0 && height > 0 && x + width <= atlas.width && y + height <= atlas.height)
+            atlas.getSubimage(x, y, width, height)
+        }
     }
+    fun image(id: Int) = sprites[if (id in 0 until COUNT) id else 8]
 }
 
 /** Keep the original PNG at source resolution; the canvas samples it directly at physical window resolution. */
