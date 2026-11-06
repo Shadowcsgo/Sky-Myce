@@ -331,7 +331,9 @@ internal class MenuDirectoryScreen(private val category: MenuCategory? = null,
     }
     private fun quickChanged(path: String) {
         SkyMyce.config.save(); notifySettingsChanged()
-        if (path == "Theme & Appearance/preset") { me.mycellium.skymyce.hud.HudTheme.changed(); rebuildMenu() }
+        if (path == "Theme & Appearance/preset" || path == "Theme & Appearance/glassMenus") {
+            me.mycellium.skymyce.hud.HudTheme.changed(); rebuildMenu()
+        }
     }
     override fun tick() {
         super.tick()

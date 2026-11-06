@@ -216,10 +216,12 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
     override fun isPauseScreen() = false
     /** The world blur behind menus is a full-screen pass every frame; Light and Extremely Light draw a plain dim instead. */
     override fun extractBlurredBackground(graphics: net.minecraft.client.gui.GuiGraphicsExtractor) {
-        if (menuBlurAllowed(AutoGraphics.quality)) super.extractBlurredBackground(graphics)
+        MenuTheme.autoQuality = AutoGraphics.quality
+        if (MenuTheme.GLASS) super.extractBlurredBackground(graphics)
     }
 
     override fun init() {
+        MenuTheme.autoQuality = AutoGraphics.quality
         val rendererChanged = texture.prepareFrame()
         val window = MC.instance.window
         val previousViewport = if (::viewport.isInitialized) viewport else null
@@ -261,7 +263,7 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
                 MenuTheme.backdrop.draw(g, c)
         } }).alignment(HorizontalAlignment.CENTER, VerticalAlignment.CENTER)
         val frame = MenuLayer(Sizing.fixed(menuLayout.width), Sizing.fixed(menuLayout.height), FlowLayout.Algorithm.HORIZONTAL, "shell", { paintedShell }).apply {
-            surface(Surface { g, c -> MenuTheme.panel().draw(g, c); drawAmbient(g as MenuGraphics, c) })
+            surface(Surface { g, c -> MenuTheme.shell().draw(g, c); drawAmbient(g as MenuGraphics, c) })
         }
         if (!modal) {
             // Category navigation stays on the left at every depth, including Home.
@@ -307,6 +309,7 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
     private fun extractMenu(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTicks: Float) {
         RuntimeProfiler.measure(RuntimeProfiler.Area.GUI) {
         if (invalid) { onClose(); return }
+        MenuTheme.autoQuality = AutoGraphics.quality
         if (texture.prepareFrame()) recoverRenderer()
         val mode = ThemeConfig.animationMode
         opening.animateTo(if (closing) 0.0 else 1.0, if (closing) 145 else 245, MotionEasing.SETTLE, mode)
@@ -845,6 +848,22 @@ internal fun paintMenuIcon(canvas: MenuCanvas, id: Int, x: Double, y: Double, si
     }
 }
 
+/** Keep the original PNG at source resolution; the canvas samples it directly at physical window resolution. */
+internal object MenuBrand {
+    val logo: java.awt.image.BufferedImage by lazy {
+        requireNotNull(MenuBrand::class.java.getResourceAsStream("/assets/skymyce/icon.png")).use {
+            requireNotNull(javax.imageio.ImageIO.read(it)) { "The bundled Sky-Myce PNG logo could not be decoded" }
+        }
+    }
+    fun paint(canvas: MenuCanvas, x: Double, y: Double, sidebar: Int) {
+        val height = 24.0
+        val width = height * logo.width / logo.height
+        canvas.picture(logo, x + if (sidebar >= 108) 10.0 else (sidebar - width) / 2, y + 2, width, height)
+        if (sidebar >= 108) canvas.text(listOf(MenuCanvas.Run("Sky-Myce", MenuTheme.alpha(MenuTheme.TEXT), bold = true)),
+            x + 39, y + (28 - MenuCanvas.lineHeight(10.0)) / 2, 10.0)
+    }
+}
+
 internal class MenuNavigation(private val layout: MenuLayout, private val activeSection: () -> Int,
                               private val indicator: MotionValue, private val action: (Int?) -> Unit,
                               private val flyout: (Int) -> Unit,
@@ -905,10 +924,9 @@ internal class MenuNavigation(private val layout: MenuLayout, private val active
         val graphics = g as MenuGraphics
         geometry.update(x().toDouble(), y().toDouble())
         revealsSettled = true
-        MenuTheme.rounded(g, x(), y(), layout.sidebar, height(), MenuTheme.SIDEBAR, 0)
+        MenuTheme.rounded(g, x(), y(), layout.sidebar, height(), MenuTheme.alpha(MenuTheme.SIDEBAR, if (MenuTheme.GLASS) 28 else 100), 0)
         g.fill(x() + layout.sidebar - 1, y(), x() + layout.sidebar, y() + height(), MenuTheme.alpha(MenuTheme.BORDER))
-        graphics.canvas.text(listOf(MenuCanvas.Run(if (layout.sidebar >= 108) "SKY-MYCE" else "SM",
-            MenuTheme.alpha(MenuTheme.TEXT), bold = true)), x() + 14.0, y() + 10.0, 10.0)
+        MenuBrand.paint(graphics.canvas, x().toDouble(), y().toDouble(), layout.sidebar)
         val section = activeSection()
         if (section in menuSectionTitles.indices) {
             val selected = menuNavigationRect(layout, section)

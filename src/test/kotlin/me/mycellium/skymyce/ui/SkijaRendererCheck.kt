@@ -63,6 +63,9 @@ fun main() {
         check(at(20, 80) == 0xFF00FFFF.toInt() && at(48, 80) == 0xFFFF00FF.toInt())
         check(alpha(at(70, 80)) == 0 && alpha(at(77, 80)) > 200) { "Ring lost its transparent centre" }
         check(red(at(94, 78)) > 240 && blue(at(94, 90)) > 240) { "Prepared image channels or orientation changed" }
+        // PNGs must interpolate at non-integer display sizes, rather than snapping to source pixels.
+        check(red(at(99, 78)) in 30..220 && green(at(99, 78)) in 30..220) { "Scaled PNGs use nearest-neighbour sampling" }
+        check(MenuBrand.logo.width == 512 && MenuBrand.logo.height == 530) { "The original PNG logo was replaced or downsampled" }
         check(abs(alpha(at(106, 90)) - 128) <= 1 && red(at(106, 90)) > 250) { "Prepared image alpha was not preserved" }
         repeat(30) {
             primitives()
@@ -150,7 +153,7 @@ fun main() {
         for (codepoint in 0x3000 until 0x4100) SkijaMenuFonts.width(codepoint, false, false, 8.0 + codepoint % 80 / 4.0)
         repeat(80) { SkijaMenuFonts.lineHeight(8.0 + it / 4.0) }
         check(SkijaMenuFonts.cacheSizes().let { it.getValue("glyphs") <= 4096 && it.getValue("fonts") <= 64 && it.getValue("lineMetrics") <= 32 }) { "Native font resources grew without bounds" }
-        val firstRun = MenuCanvas.Run("Lato · 你好 · ✈ ", -1, bold = true, italic = true)
+        val firstRun = MenuCanvas.Run("Poppins · 你好 · ✈ ", -1, bold = true, italic = true)
         val nextRun = MenuCanvas.Run("aligned", 0xFF00FF00.toInt(), underline = true)
         val advance = firstRun.text.codePoints().toArray().sumOf { SkijaMenuFonts.width(it, firstRun.bold, firstRun.italic, 18.0) }
         fun textPixels(separate: Boolean): IntArray = Surface.makeRaster(io.github.humbleui.skija.ImageInfo.makeN32Premul(400, 64)).use { surface ->
